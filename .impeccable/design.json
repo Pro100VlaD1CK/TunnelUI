@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-02T00:00:00+03:00",
+  "title": "Design System: TunnelUI",
+  "extensions": {
+    "colorMeta": {
+      "primary": { "role": "primary", "displayName": "Основное действие, светлая тема" },
+      "dark-primary-seed": { "role": "primary", "displayName": "Исходный accent для Ant darkAlgorithm" }
+    },
+    "breakpoints": [{ "name": "desktop-navigation", "value": "768px" }],
+    "motion": [{ "name": "reduced-motion", "value": "Ant token motion=false", "purpose": "Сохранять статические loading cues без shimmer" }]
+  },
+  "components": [{
+    "name": "Название панели",
+    "kind": "custom",
+    "description": "Текстовая марка в sidebar и на странице входа; значения из styles.css.",
+    "html": "<div class=\"brand\">TunnelUI</div>",
+    "css": ".brand { font-family: 'Segoe UI', sans-serif; font-size: 21px; font-weight: 650; letter-spacing: -.025em; color: var(--text, #172b3a); }"
+  }],
+  "narrative": {
+    "northStar": "Плотная читаемая административная панель",
+    "overview": "Ant Design в режиме Operate. Реальные записи и действия, видимые ошибки, без фиктивного состояния VPN.",
+    "keyCharacteristics": ["Sidebar и mobile drawer", "Таблицы с быстрыми действиями", "Light/dark", "Русский язык"],
+    "rules": [{ "name": "Состояние доступа", "body": "Сохранение глобального клиента не обозначается как применение VPN-конфигурации.", "section": "components" }],
+    "dos": ["Показывать ошибки внутри активного overlay", "Поддерживать клавиатуру и текстовые статусы"],
+    "donts": ["Не добавлять пустые колонки будущих метрик", "Не копировать frontend 3x-ui"]
+  }
+}

@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+dist/
+.pnpm-store/
+*.tsbuildinfo
+
+# IDE
+.vscode/
+.idea/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Runtime
+*.db
+*.sqlite
+*.sqlite3
+logs/
+backups/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Local research, tooling and private runtime
+.research/
+.tools/
+.cache/
+.runtime/
+*.egg-info/
+.coverage
+htmlcov/
+test-results/
+playwright-report/
+.agents/skills/impeccable/scripts/bin/
+**/.impeccable/detector.json
+**/.impeccable/hook.cache.json
+**/.impeccable/hook.pending.json
+**/.impeccable/review/

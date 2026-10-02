@@ -1,0 +1,13 @@
+# Правила TunnelUI
+- Перед началом любой работы читать PROJECT.md.
+- После существенных изменений обновлять PROJECT.md; не оставлять его устаревшим относительно кода.
+- PROJECT.md — главное краткое техническое состояние; PRODUCT.md — продукт, DESIGN.md — UI.
+- Сначала изучать официальные исходники конкретной версии; не угадывать API/capabilities.
+- Не подключаться и не деплоить production без отдельного запроса; не менять существующие сервисы.
+- Ant Design остаётся component library. Impeccable — project-local design/UX skill.
+- До крупных экранов shape/craft, после раздела critique/audit, перед frontend handoff harden/polish.
+- Продукт, доступность и плотность данных важнее декоративных рекомендаций skill.
+- Никаких shell=True, arbitrary privileged paths/commands, plaintext secrets в DB/log/audit.
+- Integration tests используют temp directories/fakes, никогда реальный systemd.
+- Не редактировать DB 3x-ui. Изменения решений помечать superseded, не стирать историю.
+- Сообщения коммитов на русском. Не коммитить runtime, ключи, credentials и research clones.
