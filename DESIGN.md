@@ -76,6 +76,15 @@ Drawers для create/edit. Modals для delete/disable/rotate/restart/restore 
 Confirmation errors показывать внутри активного modal. Revision conflict в editor
 предлагает «Закрыть без сохранения и обновить список», не отбрасывает edits молча.
 Session expiry объясняется на экране входа. Save показывает feedback, но не обещает apply.
+Adoption использует два честных этапа: обнаружение и проверка/импорт. После partial
+apply интерфейс даёт прямой переход к inbound и Operation journal. В журнале технические
+enum переводятся в операторские русские labels; error code показывается как безопасный
+результат, без secret details. Desired и applied всегда показаны раздельно.
+Profiles связывает каждую строку и export action с конкретным inbound. QR/deep-link/TOML
+создаются только явным действием; clipboard failure оставляет профиль открытым для
+ручного копирования. Fake exporter всегда явно помечен как тестовый.
+Drawer section headings используют единый 17px уровень; bare oversized h2 внутри
+операционных drawers не применять. На mobile wide tables остаются в собственном scroll.
 UI states: loading, empty, failed/retry, ready, submitting, validation error, disabled.
 Motion минимальная: prefers-reduced-motion отключает Ant motion token и декоративный
 Skeleton shimmer, сохраняя статическое сообщение загрузки; глобального .01ms reset нет.

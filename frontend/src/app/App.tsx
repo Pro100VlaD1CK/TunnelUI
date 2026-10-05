@@ -11,6 +11,7 @@ import { Clients } from '../features/clients/Clients';
 import { Inbounds } from '../features/inbounds/Inbounds';
 import { Audit } from '../features/audit/Audit';
 import { Settings } from '../features/settings/Settings';
+import { Profiles } from '../features/profiles/Profiles';
 import { Shell } from './Shell';
 
 function SessionApp({ dark, toggleTheme }: { dark: boolean; toggleTheme: () => void }) {
@@ -32,7 +33,7 @@ function SessionApp({ dark, toggleTheme }: { dark: boolean; toggleTheme: () => v
   if (!me.data) return <Login expired={expiredSession} onLogin={() => { setExpiredSession(false); cache.invalidateQueries({ queryKey: ['me'] }); window.location.hash = '/inbounds'; }} />;
   return <Routes><Route element={<Shell dark={dark} toggleTheme={toggleTheme} username={me.data.username} logout={() => logout.mutate()} loggingOut={logout.isPending} />}>
     <Route path="/inbounds" element={<Inbounds />} /><Route path="/clients" element={<Clients />} />
-    <Route path="/profiles" element={<PlannedFeature title="Профили" description="Здесь появятся QR, tt:// и TOML через официальный TrustTunnel CLI, а также подписки Mihomo от 3x-ui. Секреты будут показываться только по вашему действию." />} />
+    <Route path="/profiles" element={<Profiles />} />
     <Route path="/rules" element={<PlannedFeature title="Правила" description="Редактирование упорядоченных правил TrustTunnel станет доступно после подключения безопасного применения конфигурации." />} />
     <Route path="/settings" element={<Settings />} /><Route path="/audit" element={<Audit />} />
     <Route path="*" element={<Navigate to="/inbounds" replace />} />

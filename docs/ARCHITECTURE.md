@@ -29,21 +29,30 @@ allowlist; cert symlinks read-only отдельным путём (Let's Encrypt 
 NoNewPrivileges для web, root agent минимальные permissions. Не давать web sudo.
 
 ## Adoption
-Detect only allowlisted services → snapshot bytes + hashes + version/help + status
-→ parse preserving unknown vpn/hosts/rules → secret-free preview с snapshot ID/TTL
-→ explicit confirmation → recheck hashes под lock → backup → DB metadata и encrypted
-credentials transaction. Collision username требует explicit mapping, не auto-merge.
-Ни initial files, ни unit не переписываются. Preview нельзя подменить path из HTTP.
+Текущий sandbox реализует Detect → snapshot bytes/hashes → parse → secret-free preview
+с TTL → explicit confirmation → повторное чтение и hash check → backup → DB metadata
+и encrypted attachments. Collision username и неизвестные credential fields fail closed.
+Ни initial files, ни unit не переписываются. HTTP не принимает filesystem paths.
+Production discovery позднее заменит fixture registry на root-owned allowlist и
+структурированный systemd D-Bus ответ.
 
 ## Apply и recovery
-Per-inbound OS lock и операция с idempotency ID. States: pending, validating,
-backed_up, files_written, restarting, healthy, applied, rolling_back, rolled_back,
-rollback_failed, interrupted. Журнал хранится агентом с fsync, secrets только в
-private config backup, не в journal. На startup незавершённые операции блокируют
-новые apply до reconciliation. Проверка hashes всех четырёх файлов, не только
-изменяемого. После сбоя health вернуть старые bytes, metadata и service; rollback
-failure виден как degraded, никогда success. Native filesystem core текущего
-прохода только sandbox; production флаг пока отсутствует.
+Sandbox coordinator использует per-inbound in-process lock и idempotency ID. Durable
+DB states: pending, preparing, backed_up, writing, applying, checking, succeeded,
+rolling_back, rolled_back, failed, needs_recovery. Checkpoints commit перед каждой
+границей внешнего эффекта. Operation хранит только hashes и safe error codes; secret
+bytes находятся только в зашифрованной БД и private backup.
+
+Перед replace проверяются hashes всех managed files. После restart/health failure
+восстанавливается operation-owned backup, затем повторяются restart и health. Если
+это не подтверждает здоровье, inbound получает recovery_required, новые apply
+блокируются, UI предлагает explicit recover. Desired/applied state изменяется только
+после подтверждённого результата. AuditEvent фиксирует безопасный операторский итог
+отдельно от технического Operation journal.
+
+Production требует OS lock, crash reconciliation при startup, descriptor-based
+filesystem boundary и helper-owned journal/backup. Текущий native filesystem core
+работает только с explicit sandbox directories и FakeSystemProvider.
 
 ## Expiry и sync (следующие этапы)
 UTC clock; durable scheduler периодически находит due attachments, группирует по
@@ -55,5 +64,7 @@ Delete/disable external с отдельным подтверждением и re
 
 ## UI
 Hash routes для static serving. Query cache не хранит passwords. Login → Входящие.
-Таблицы плотные, empty state объясняет следующий безопасный шаг. Нет mock health
-или fictitious data. Deferred action disabled с причиной. Ошибки остаются видимыми.
+Таблицы плотные, empty state объясняет следующий безопасный шаг. Sandbox service
+status маркируется как тестовый контур; production status не симулируется. Profiles
+экспортируется по явно выбранному inbound, поэтому несколько attachments не создают
+неоднозначный QR. Partial apply ведёт прямо к журналу входящего. Ошибки остаются видимыми.

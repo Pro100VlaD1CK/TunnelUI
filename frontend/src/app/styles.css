@@ -24,6 +24,18 @@ button, input, textarea { font: inherit; }
 .ant-empty { margin: 40px 16px; }
 .table-note { margin-top: 12px; }
 .refresh-list { margin-bottom: 12px; }
+.list-controls { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+.flow-content { margin-top: 24px; }
+.flow-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.technical-value { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+.section-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-top: 24px; }
+.section-heading h2.ant-typography, .client-drawer h2.ant-typography { font-size: 17px; margin: 0; }
+.client-drawer h2.ant-typography { margin: 24px 0 16px; }
+.generate-secret { margin-top: -12px; margin-bottom: 16px; }
+.connection-limits { display: flex; width: 100%; }
+.connection-limits > .ant-space-item { flex: 1; }
+.connection-limits .ant-input-number { width: 100%; }
+.qr-panel { display: flex; flex-direction: column; align-items: center; gap: 16px; text-align: center; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .login-page { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: var(--surface); }
 .login-panel { width: 100%; max-width: 380px; }
@@ -39,6 +51,9 @@ button, input, textarea { font: inherit; }
   .admin-name { display: none; }
   .page-heading { align-items: flex-start; }
   .page-heading > .ant-btn { width: 100%; }
+  .list-controls .ant-btn { width: 100%; }
+  .section-heading { align-items: flex-start; flex-direction: column; }
+  .connection-limits { display: block; }
   .toolbar .ant-input-search, .toolbar .ant-select { width: 100%; }
   .ant-drawer-content-wrapper { max-width: 100vw; }
   .ant-btn { min-height: 44px; }

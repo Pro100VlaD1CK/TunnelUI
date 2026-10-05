@@ -1,89 +1,83 @@
-# Admin surface: итоговый audit / polish
+# Admin surface: Impeccable critique / audit / harden / polish
 
-Дата: 2026-10-02. Scope: текущие auth, shell, Clients, read-only Inbounds, Audit,
-deferred Settings/Profiles/Rules. Impeccable применён как design/UX skill;
-Ant Design и плотная административная компоновка сохранены.
+Дата: 2026-10-05. Scope: auth, shell, TrustTunnel adoption/inbounds, clients,
+attachments/apply/recovery, Profiles, Audit и deferred Settings/Rules. Ant Design и
+плотная административная компоновка сохранены.
 
-## Implementation integrity
+## Результат audit
 
-**Pass в текущем локальном scope.** Реальные операции клиентов используют API/SQLite,
-недоступные integrations обозначены явно, нет fake health/traffic или декоративных KPI.
-Завершённость этой поверхности не означает готовность управления VPN на production.
+Детерминированный detector запускался один раз:
+`.agents/skills/impeccable/scripts/impeccable.cmd detect --json frontend/src`.
+Exit 0, JSON `[]`, 0 findings и 0 suppressions. Две независимые оценки использовали
+исходники, шесть актуальных Playwright screenshots и passed `.last-run.json`.
 
-Детерминированный audit 2026-10-02: один запуск
-`.agents/skills/impeccable/scripts/impeccable.cmd detect --json frontend/src`;
-exit 0, JSON `[]`, 0 findings, 0 false positives. Это отдельно от ручных находок.
-Предыдущий независимый отчёт сохранён в [UI-DETECTOR.md](UI-DETECTOR.md).
-Сохранённого critique snapshot для `frontend/src/app/App.tsx` не найдено;
-несуществующий snapshot не закрывался.
-
-## Оценка после исправлений
-
-| Измерение | Балл / 4 | Основание и граница проверки |
+| Измерение | Балл / 4 | Основание и граница |
 |---|---:|---|
-| Accessibility | 3 | Labels, status, keyboard skip, ошибки и contrast primary проверены; полного AT/WCAG прогона нет |
-| Performance | 2 | Pagination 25, нет media/effects; остаётся большой Ant Design chunk |
-| Responsive | 3 | Desktop/mobile, drawer, wrap и внутренний scroll работают; полной zoom/device matrix нет |
-| Theming | 3 | ConfigProvider, обе темы, устранён измеренный дефект contrast; не измерено каждое состояние каждого control |
-| Implementation integrity | 4 | Последовательный admin UI, реальные и deferred операции различимы |
-| **Итого** | **15/20 — Good** | Оценка проверенного scope, не сертификация |
+| Accessibility | 3 | Labels, skip-link, focus, text+color states, reduced motion; полного AT/WCAG прогона нет |
+| Performance | 2 | Нет лишней animation/media, но eager Ant chunk около 1.23 MB raw |
+| Responsive | 3 | 390px shell/drawers/controls и отсутствие document overflow проверены; wide data tables используют внутренний scroll |
+| Theming | 4 | Обе темы, custom tokens и primary contrast проверены Playwright |
+| Implementation integrity | 3 | Реальные sandbox operations и честные deferred states; production adapters отсутствуют явно |
+| **Итого** | **15/20 — Good** | Оценка текущего локального scope, не accessibility или production certification |
 
-## Закрытые находки review и polish
+## Critique
 
-| Находка | Исправление | Проверка |
-|---|---|---|
-| Ошибка destructive action была за modal | Alert внутри ClientActionModal | E2E: отказ удаления 409 виден в открытом dialog |
-| Revision conflict без пути восстановления | Явное закрытие без сохранения и обновление списка | E2E: реальное конкурентное API-изменение, refresh актуальной записи |
-| Возврат к login без причины | Сообщение об истечении сессии | E2E: удаление cookie и authenticated refresh |
-| Пустые колонки будущих metrics | Убраны до подключения, оставлено пояснение | Source и свежие desktop/mobile screenshots |
-| Skeleton без доступного статуса | role=status, текст загрузки; декоративный skeleton скрыт от AT | Source review QueryState |
-| Глобальный .01ms reduced-motion reset | Ant motion token и адресное отключение shimmer | Source review; browser scenario с reducedMotion=reduce |
-| Пустая page 2 после удаления 26-й строки | Ограничение текущей страницы новым total | E2E: 26 → 25, показ populated page 1 |
-| **P1:** контраст primary label в dark 3.084:1 | Общий Button.primaryColor и Menu.darkItemSelectedColor #101820 | Computed-style E2E primary button: >=4.5:1 в обеих темах |
+Nielsen: **28/40 — Good**. Сильная сторона поверхности — объяснение backup, atomic
+replace, restart, health, rollback и last-client protection до опасного действия.
+Основная нагрузка была связана с raw state enums, partial apply без прямого recovery
+пути и неоднозначным profile export при нескольких inbound.
 
-Последнее исправление — локальный дефект token configuration, устранён на уровне
-ConfigProvider. Danger color не подменён. DESIGN.md отражает seed/rendered accent
-и цвет подписи. Новая визуальная концепция, лишняя animation и новые функции не добавлялись.
+## Закрытые находки
 
-## Оставшаяся находка
+- Profile export теперь требует конкретный `inbound_id`; строка каждого attachment
+  создаёт QR/deep-link/TOML именно для показанного источника.
+- Partial create/apply показывает, что уже сохранено, и ведёт прямо к inbound operation journal.
+- Desired/applied/sync, operation kind/result и management state получили русские labels.
+- Adoption показывает два честных этапа вместо недостижимого третьего шага.
+- «Проверить drift» больше не обещает мгновенную проверку из menu; действие открывает
+  экран проверки. Неиспользуемый inbound query-filter не имитируется.
+- Clipboard denial не создаёт unhandled rejection: профиль остаётся открыт для ручного действия.
+- Drawer section headings приведены к уровню из DESIGN.md.
+- Metadata привязанного клиента можно редактировать; credential-affecting поля явно
+  заблокированы до отдельного apply-aware workflow.
 
-**[P2] Большой общий Ant Design chunk.** Категория Performance; место:
-`frontend/vite.config.ts` (vendor chunk) и итоговый Vite build. Около 1163 kB raw /
-375 kB gzip; это увеличивает первую загрузку на медленной связи. Измеренного
-нарушения latency budget пока нет. В отдельном performance проходе измерить cold
-load, изучить импортируемый состав и route-level splitting; не разбивать chunk
-механически ради исчезновения warning. Команда: `/impeccable optimize`, затем
-ограниченный `/impeccable polish` изменённого пути.
+Ранее закрытые находки сохранены: confirmation errors внутри modal, revision conflict
+recovery, session-expiry feedback, pagination после удаления, accessible loading,
+reduced-motion tokens и primary label contrast в обеих темах.
 
-Открытые подтверждённые findings: P0=0, P1=0, P2=1, P3=0. Системного визуального
-drift не найдено. Неохваченные AT, zoom и browser matrix — границы доказательств,
-а не выдуманные дефекты. Повторный общий scan после каждого micro-edit не выполнялся.
+## Оставшиеся findings и границы
 
-## Browser evidence
+- **P2 Performance:** route features загружаются eager, итоговый Ant chunk около
+  1.23 MB raw / 396 kB gzip. Нужен измеренный optimize pass с route-level lazy loading;
+  warning не скрывать механическим chunk split.
+- **P2 Responsive evidence:** wide tables доступны через внутренний horizontal scroll,
+  но отдельная screen-reader/zoom/browser matrix не выполнена.
+- **P3 Polish:** быстрые последовательные success messages могут перекрывать header
+  на mobile. Это transient nonblocking состояние; dedupe/top offset отложены.
+- Actions menu растёт с количеством attachments. До подтверждённого масштаба сохраняется
+  текущая плотная модель; группировку и bulk actions проверять по реальным workflows.
 
-Локальный Chrome через Playwright, временная SQLite, loopback 127.0.0.1:8765.
-Desktop 1440×960 и mobile 390×844; login → Inbounds → create/edit/conflict/delete
-Clients → Audit → logout. Проверены длинное имя, duplicate, network failure,
-empty state, смена темы и mobile drawer. В основном сценарии нет pageerror;
-mobile не создаёт горизонтальный overflow документа, таблица скроллится внутри.
+## Harden evidence
 
-Свежие изображения текущего прогона (ignored, воспроизводятся тестами):
-`frontend/test-results/inbounds-desktop-light.png`, `clients-desktop-dark.png`,
-`clients-mobile-dark.png`, `login-mobile-light.png`, `confirmation-error.png`.
-Live Impeccable overlay/injection не использовался. Полная проверка screen reader,
-touch hardware, zoom, всех браузеров и performance profiling не выполнялась.
+Playwright покрывает adoption, создание и apply, last-client guard, concurrent action,
+drift/re-import, rollback, `needs_recovery`, expired session, network failure, revision
+conflict, pagination, keyboard skip, contrast и 390px overflow. Backend tests покрывают
+все Operation checkpoints, failed rollback/recovery, no-sandbox fail-closed, secret
+redaction, profile source selection и metadata-only edit attached client.
+
+Live Impeccable overlay не использовался: готовой browser surface не было. Проверка
+основана на воспроизводимых Playwright artifacts и source review. VPS, real TrustTunnel,
+3x-ui и production не подключались.
 
 ## Финальный контрольный прогон
 
 | Проверка | Результат |
 |---|---|
 | Backend Ruff | Pass |
-| Backend pytest | **62 passed**, одно upstream TestClient/httpx deprecation warning |
-| Frontend TypeScript + Vite production build | Pass, предупреждение о vendor chunk выше |
-| Frontend Vitest | **2 passed** |
-| Playwright Chrome | **5 passed**, финальный прогон 17.3 s |
+| Backend pytest | **79 passed**, одно upstream TestClient/httpx warning |
+| TypeScript | Pass |
+| Vite production build | Pass, известный large-chunk warning |
+| Frontend Vitest | **3 passed** |
+| Playwright Chromium | **6 passed** |
 
-Промежуточные e2e обнаружили реальный contrast defect и два неоднозначных test
-locator/ожидания закрытия drawer. Исправлены причина и тесты; финальный прогон зелёный.
-CI workflow добавлен, remote CI не запускался. VPS, 3x-ui и TrustTunnel не подключались;
-production deployment и изменение рабочих сервисов не выполнялись.
+Impeccable installed skill: 4.3.1; доступна 4.5.0, обновление не выполнялось.

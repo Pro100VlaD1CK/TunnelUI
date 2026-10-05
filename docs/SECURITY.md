@@ -24,23 +24,28 @@ Browser localStorage содержит только тему. Секретов т
 session будущий helper не принимает paths или commands. Компрометация web UID
 ограничивается root registry capabilities; ограничить socket peer UID и payload.
 SQL injection закрывается SQLAlchemy bind parameters; race edits — revision CAS;
-duplicate usernames — DB uniqueness. Client с attachments нельзя менять/удалять
-через Phase 1 CRUD, пока orchestration apply не подключён.
+duplicate usernames — DB uniqueness. Для client с attachments metadata edit разрешён,
+а username/expiry/global enabled идут только через apply-aware paths; delete fail closed.
 Секретный master key и DB вместе позволяют decrypt; защищать отдельно и backup
 раздельно. Privileged endpoint binary экспортирует секретный stdout — не логировать.
 
 ## Граница текущего результата
-SandboxAdoptionService/SandboxApplyService не подключены к HTTP. Apply принимает
-только точный FakeSystemProvider, не произвольный production subclass. Нет native
-systemd provider, agent executable, sudoers, service units или production startup.
-Fake events в памяти — тестовый probe, не production durable audit. Backup files
-содержат credentials и требуют private directory; retention/restore ещё не реализованы.
-Unknown version не разрешает управление. Runtime --help и SHA binary не получены.
+Sandbox adoption/apply подключены к HTTP только при explicit development flag и
+fixture registry. Без него management endpoints отвечают `sandbox_unavailable`; fake
+provider не выбирается автоматически. Operation journal durable в SQLite, а AuditEvent
+остаётся отдельной сущностью; оба содержат только allowlisted metadata и safe codes.
+Backup files содержат credentials и создаются только в private sandbox directory;
+retention и production restore policy ещё не реализованы.
+
+Нет native systemd provider, agent executable, sudoers, service units или production
+startup. Locks in-process, не межпроцессные. Runtime `--help` и SHA установленного
+binary не получены. Fake exporter намеренно выдаёт не настоящий `tt://`.
 
 ## Обязательные проверки до Phase 5
 - Linux descriptor-based no-follow path traversal, ownership, permissions, hardlinks,
   parent directory checks, per-inbound OS locks и privilege separation tests.
-- Durable operation journal, crash/power-loss recovery, fsync и reconciliation DB/files/service.
+- Helper-owned journal, OS locks и startup reconciliation после process/power loss;
+  SQLite Operation checkpoints уже проверяют sandbox crash boundaries.
 - Health должен включать service state и проверку требуемых listeners/TLS, bounded retry;
   active systemd state сам по себе не подтверждает готовность TCP/UDP endpoint.
 - Подтверждённый способ отключить последнего клиента v1.1.0, либо безопасно
@@ -48,7 +53,8 @@ Unknown version не разрешает управление. Runtime --help и 
 - Ограничение размера request до парсинга на reverse proxy, shared rate limit при
   масштабировании, безопасная доверенная proxy policy, HTTPS и firewall.
 - Протокол key rotation/recovery и backup retention; tamper resistance audit.
-- Expiry durable scheduler и visible failed jobs, client attachment apply UI.
+- Expiry durable scheduler и visible failed jobs; attachment apply UI уже есть,
+  credential-affecting edit существующего attachment пока ограничен.
 - 3x-ui URL allowlist/SSRF policy для реального подключения; adapter пока не HTTP endpoint.
   Не следовать redirect с Bearer token, TLS verification включена, bounded response.
 - Dependency vulnerability audit и staging acceptance на Debian 12.
