@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     development: bool = False
     session_seconds: int = 28800
     static_dir: Path = Path("frontend/dist")
+    sandbox_root: Path | None = None
 
     @model_validator(mode="after")
     def secure_defaults(self):
@@ -27,4 +28,6 @@ class Settings(BaseSettings):
             raise ValueError("insecure cookies require explicit loopback development")
         if self.secure_cookie and parsed.scheme != "https":
             raise ValueError("secure mode requires HTTPS origin")
+        if self.sandbox_root is not None and not self.development:
+            raise ValueError("sandbox_root requires explicit development mode")
         return self

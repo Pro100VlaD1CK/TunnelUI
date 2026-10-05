@@ -10,6 +10,7 @@ from tunnelui.config import Settings
 from tunnelui.db import database
 from tunnelui.domain.errors import DomainError
 from tunnelui.services.auth import LoginLimiter
+from tunnelui.services.sandbox import SandboxRuntime
 
 
 def create_app(settings: Settings | None = None):
@@ -18,6 +19,8 @@ def create_app(settings: Settings | None = None):
 
     @asynccontextmanager
     async def lifespan(_):
+        if app.state.sandbox:
+            app.state.sandbox.coordinator.recover_all()
         yield
         engine.dispose()
 
@@ -25,6 +28,10 @@ def create_app(settings: Settings | None = None):
                   openapi_url=None, lifespan=lifespan)
     app.state.settings, app.state.sessions = settings, sessions
     app.state.engine, app.state.limiter = engine, LoginLimiter()
+    app.state.sandbox = (
+        SandboxRuntime(settings.sandbox_root, sessions, settings.master_key_file)
+        if settings.development and settings.sandbox_root else None
+    )
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):

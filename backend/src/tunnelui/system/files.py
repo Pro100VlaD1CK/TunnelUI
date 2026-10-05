@@ -1,6 +1,7 @@
 import os
 import stat
 import tempfile
+import uuid
 from pathlib import Path
 
 
@@ -34,6 +35,36 @@ def atomic_replace(path: Path, content: bytes):
         fsync_directory(path.parent)
     finally:
         temp.unlink(missing_ok=True)
+
+
+def prepare_atomic(path: Path, content: bytes, operation_id: str) -> Path:
+    """Write and fsync an operation-owned sibling without replacing the target."""
+    uuid.UUID(operation_id)
+    if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
+        raise OSError("managed file must be a regular non-hardlinked file")
+    info = path.stat()
+    temp = path.parent / f".tunnelui-{operation_id}-{path.name}"
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            if os.name == "posix":
+                os.fchmod(stream.fileno(), stat.S_IMODE(info.st_mode))
+                os.fchown(stream.fileno(), info.st_uid, info.st_gid)
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        fsync_directory(path.parent)
+    except BaseException:
+        temp.unlink(missing_ok=True)
+        raise
+    return temp
+
+
+def commit_atomic(path: Path, temp: Path) -> None:
+    if temp.parent != path.parent or not temp.is_file() or temp.is_symlink():
+        raise OSError("invalid prepared file")
+    os.replace(temp, path)
+    fsync_directory(path.parent)
 
 
 def private_backup(root: Path, operation_id: str, files: dict[str, bytes]) -> Path:

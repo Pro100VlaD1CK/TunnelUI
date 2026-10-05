@@ -36,7 +36,10 @@ def test_attached_changes_fail_closed(authenticated, app):
         db.add(Attachment(client_id=client["id"], inbound_id=inbound.id))
         db.commit()
     assert authenticated.delete(f"/api/clients/{client['id']}?revision=1").json()["code"] == "attached_client_requires_apply"
-    assert authenticated.put(f"/api/clients/{client['id']}", json={**BODY, "revision": 1}).status_code == 409
+    assert authenticated.put(
+        f"/api/clients/{client['id']}",
+        json={**BODY, "username": "changed-username", "revision": 1},
+    ).status_code == 409
 
 
 def test_pagination_and_validation(authenticated):

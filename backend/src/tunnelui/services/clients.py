@@ -35,7 +35,15 @@ class ClientService:
         return client
 
     def edit(self, client_id: str, data: ClientUpdate):
-        client = self.editable(client_id)
+        client = self.db.get(Client, client_id)
+        if not client:
+            raise DomainError("client_not_found", 404)
+        if self.repo.attached(client_id) and (
+            data.username != client.username
+            or data.enabled != client.enabled
+            or data.expires_at != client.expires_at
+        ):
+            raise DomainError("attached_client_requires_apply")
         action = "client.disable" if client.enabled and not data.enabled else "client.edit"
         try:
             result = self.db.execute(update(Client).where(

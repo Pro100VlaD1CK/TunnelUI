@@ -1,0 +1,7 @@
+listen_address = "0.0.0.0:443"
+credentials_file = "credentials.toml"
+rules_file = "rules.toml"
+
+[listen_protocols.http1]
+[listen_protocols.http2]
+[listen_protocols.quic]

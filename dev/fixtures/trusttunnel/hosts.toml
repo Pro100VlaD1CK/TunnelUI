@@ -1,0 +1,4 @@
+[[main_hosts]]
+hostname = "vpn.sandbox.invalid"
+certificate_path = "/sandbox/cert.pem"
+private_key_path = "/sandbox/key.pem"

@@ -9,11 +9,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from tunnelui.domain.errors import DomainError
-from tunnelui.integrations.trusttunnel import parse_credentials, preview
+from tunnelui.integrations.trusttunnel import capabilities, parse_credentials, preview
 from tunnelui.models import Attachment, Client, Inbound
 from tunnelui.security import SecretBox
 from tunnelui.services.apply import SandboxApplyService
 from tunnelui.services.audit import record
+from tunnelui.services.operations import InboundLocks
 from tunnelui.system.files import private_backup
 
 
@@ -25,11 +26,14 @@ class SandboxAdoptionService:
     """
 
     def __init__(self, sandbox: SandboxApplyService, registry_id: str,
-                 working_directory: str, exec_start: list[str], version: str):
+                 working_directory: str, exec_start: list[str], version: str,
+                 public_address: str = "example.test:443", locks: InboundLocks | None = None):
         self.sandbox, self.registry_id = sandbox, registry_id
         self.working_directory, self.exec_start, self.version = working_directory, exec_start, version
+        self.public_address = public_address
         self._pending: tuple[str, float, dict] | None = None
         self._lock = threading.Lock()
+        self._inbound_locks = locks or InboundLocks()
 
     def _preview(self):
         return preview(self.working_directory, self.exec_start, self.sandbox.snapshot(), self.version)
@@ -39,10 +43,33 @@ class SandboxAdoptionService:
             data = self._preview()
             token = secrets.token_urlsafe(24)
             self._pending = (token, time.monotonic() + 300, data)
-            return {**data, "preview_id": token, "registry_id": self.registry_id}
+            cap = capabilities(self.version)
+            return {
+                **data, "preview_id": token, "registry_id": self.registry_id,
+                "service_name": self.registry_id,
+                "public_address": self.public_address,
+                "service_status": "running" if self.sandbox.provider.running else "stopped",
+                "capabilities": {
+                    "client_metrics": cap.client_metrics,
+                    "export_deeplink": cap.export_deeplink,
+                    "tls_reload": cap.tls_reload,
+                    "credential_reload": cap.credential_reload,
+                },
+                "warnings": ([] if cap.verified else ["Версия endpoint не подтверждена"]),
+            }
+
+    def discover(self):
+        data = self._preview()
+        return {
+            "found": True, "registry_id": self.registry_id,
+            "service_name": self.registry_id, "version": data["version"],
+            "working_directory": data["working_directory"],
+            "listen_address": data["listen_address"],
+            "service_status": "running" if self.sandbox.provider.running else "stopped",
+        }
 
     def confirm(self, preview_id: str, db: Session, box: SecretBox, admin: str):
-        with self._lock:
+        with self._lock, self._inbound_locks.acquire(self.registry_id):
             pending = self._pending
             if not pending or pending[0] != preview_id or pending[1] <= time.monotonic():
                 raise DomainError("adoption_preview_expired")
@@ -62,7 +89,8 @@ class SandboxAdoptionService:
             private_backup(self.sandbox.backup_root, operation_id, snapshot)
             inbound = Inbound(name="TrustTunnel", kind="trusttunnel", registry_id=self.registry_id,
                               metadata_json=json.dumps({k: v for k, v in fresh.items() if k != "hashes"}),
-                              hashes_json=json.dumps(fresh["hashes"]))
+                              hashes_json=json.dumps(fresh["hashes"]),
+                              public_address=self.public_address, config_state="synced")
             try:
                 db.add(inbound)
                 db.flush()
@@ -73,7 +101,9 @@ class SandboxAdoptionService:
                     db.add(Attachment(client_id=client.id, inbound_id=inbound.id,
                                       secret_ciphertext=box.encrypt(credential.password),
                                       max_http2_conns=credential.max_http2_conns,
-                                      max_http3_conns=credential.max_http3_conns, sync_state="synced"))
+                                      max_http3_conns=credential.max_http3_conns,
+                                      enabled=True, desired_state="active",
+                                      applied_state="active", sync_state="active"))
                 record(db, admin, "inbound.adopt", "inbound", inbound.id)
                 db.commit()
             except IntegrityError:

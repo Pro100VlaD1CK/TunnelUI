@@ -52,6 +52,10 @@ class Inbound(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     hashes_json: Mapped[str] = mapped_column(Text, default="{}")
+    public_address: Mapped[str | None] = mapped_column(String(255))
+    config_state: Mapped[str] = mapped_column(String(32), default="synced")
+    created_at: Mapped[int] = mapped_column(Integer, default=now)
+    updated_at: Mapped[int] = mapped_column(Integer, default=now)
 
 
 class Attachment(Base):
@@ -64,6 +68,31 @@ class Attachment(Base):
     max_http2_conns: Mapped[int | None] = mapped_column(Integer)
     max_http3_conns: Mapped[int | None] = mapped_column(Integer)
     sync_state: Mapped[str] = mapped_column(String(32), default="pending")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    desired_state: Mapped[str] = mapped_column(String(32), default="active")
+    applied_state: Mapped[str] = mapped_column(String(32), default="pending")
+    created_at: Mapped[int] = mapped_column(Integer, default=now)
+    updated_at: Mapped[int] = mapped_column(Integer, default=now)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class Operation(Base):
+    __tablename__ = "operations"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    inbound_id: Mapped[str] = mapped_column(
+        ForeignKey("inbounds.id", ondelete="RESTRICT"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(32))
+    state: Mapped[str] = mapped_column(String(32), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(128), unique=True)
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+    expected_hashes_json: Mapped[str] = mapped_column(Text, default="{}")
+    result_hashes_json: Mapped[str] = mapped_column(Text, default="{}")
+    backup_id: Mapped[str | None] = mapped_column(String(36))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[int] = mapped_column(Integer, default=now)
+    updated_at: Mapped[int] = mapped_column(Integer, default=now)
+    completed_at: Mapped[int | None] = mapped_column(Integer)
 
 
 class AuditEvent(Base):
