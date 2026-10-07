@@ -119,6 +119,9 @@ class LinuxAgentClient:
     def cleanup(self, managed_id: str, operation_id: str) -> None:
         self._operation(managed_id, "files.cleanup", operation_id)
 
+    def describe(self, managed_id: str) -> dict[str, object]:
+        return self._call(managed_id, "managed.describe", {})
+
     def status(self, managed_id: str) -> dict[str, object]:
         return self._call(managed_id, "service.status", {})
 

@@ -485,3 +485,29 @@ def test_export_failure_does_not_expose_argv_or_output(monkeypatch):
     assert str(captured.value) == "profile_export_timeout"
     assert "secret" not in str(captured.value)
 
+
+
+def test_managed_describe_rejects_client_supplied_dynamic_fields():
+    decoded, arguments = decode_request(request(operation="managed.describe"))
+    assert decoded.operation == "managed.describe"
+    assert arguments.model_dump() == {}
+
+    with pytest.raises(ProtocolError, match="malformed_request"):
+        decode_request(
+            request(
+                operation="managed.describe",
+                arguments={"path": "/etc/shadow"},
+            )
+        )
+
+
+def test_linux_client_describe_uses_only_allowlisted_managed_id():
+    transport = RecordingTransport()
+    client = LinuxAgentClient(transport)
+
+    assert client.describe("primary") == {}
+
+    sent = transport.requests[-1]
+    assert sent["managed_id"] == "primary"
+    assert sent["operation"] == "managed.describe"
+    assert sent["arguments"] == {}

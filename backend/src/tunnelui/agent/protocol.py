@@ -61,6 +61,7 @@ class AgentRequest(StrictModel):
         "files.prepare_credentials", "files.commit_credentials",
         "files.restore_credentials", "files.cleanup", "service.status",
         "service.restart", "service.reload", "health.probe", "profile.export",
+        "managed.describe",
     ]
     arguments: dict[str, object] = Field(default_factory=dict)
 
@@ -79,6 +80,7 @@ ARGUMENT_TYPES: dict[str, type[StrictModel]] = {
     "service.reload": OperationArguments,
     "health.probe": EmptyArguments,
     "profile.export": ExportArguments,
+    "managed.describe": EmptyArguments,
 }
 
 
