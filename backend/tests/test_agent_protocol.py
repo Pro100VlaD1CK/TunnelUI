@@ -534,3 +534,49 @@ def test_health_retries_during_endpoint_startup():
     assert attempts == 2
     assert result.tcp.status == "ok"
     assert result.tls.status == "ok"
+
+
+def test_deeplink_export_discards_cli_explanatory_text(monkeypatch):
+    exporter = TrustTunnelCliExporter(object())
+
+    calls = 0
+
+    def fake_run(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return 0, b"trusttunnel_endpoint 1.1.0"
+        if calls == 2:
+            return 0, b"-c -a --format deeplink toml"
+        return 0, (
+            b"tt://?VALID_PAYLOAD\n\n"
+            b"To connect on mobile, scan the QR page\n"
+        )
+
+    class OpenBinary:
+        def __enter__(self):
+            return 7, 8, type(
+                "Info",
+                (),
+                {
+                    "st_ino": 1,
+                    "st_mtime_ns": 1,
+                    "st_ctime_ns": 1,
+                    "st_size": 1,
+                },
+            )()
+
+        def __exit__(self, *_args):
+            return False
+
+    class Files:
+        def open_binary(self, _instance):
+            return OpenBinary()
+
+    exporter.files = Files()
+    monkeypatch.setattr(exporter, "_run", fake_run)
+
+    result = exporter.export(instance(), "alice", "deeplink")
+
+    assert result == b"tt://?VALID_PAYLOAD"
+    assert b"\n" not in result
