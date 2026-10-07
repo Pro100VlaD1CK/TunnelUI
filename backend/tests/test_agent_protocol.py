@@ -511,3 +511,26 @@ def test_linux_client_describe_uses_only_allowlisted_managed_id():
     assert sent["managed_id"] == "primary"
     assert sent["operation"] == "managed.describe"
     assert sent["arguments"] == {}
+
+
+def test_health_retries_during_endpoint_startup():
+    attempts = 0
+
+    async def starting_tcp(*_args):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("not ready yet")
+
+    result = asyncio.run(
+        HealthProbe(
+            FakeSystemd(),
+            starting_tcp,
+            succeeds,
+        ).run(instance(), 1.0)
+    )
+
+    assert result.healthy is True
+    assert attempts == 2
+    assert result.tcp.status == "ok"
+    assert result.tls.status == "ok"
