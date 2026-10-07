@@ -6,7 +6,6 @@ from pathlib import Path
 import uvicorn
 from alembic import command
 from alembic.config import Config
-
 from tunnelui.config import Settings
 from tunnelui.main import create_app
 from tunnelui.models import Admin

@@ -1,6 +1,6 @@
 """Disposable loopback-only server for browser acceptance tests, never production."""
-import tempfile
 import shutil
+import tempfile
 from pathlib import Path
 
 import uvicorn
