@@ -83,6 +83,8 @@ enum переводятся в операторские русские labels; e
 Profiles связывает каждую строку и export action с конкретным inbound. QR/deep-link/TOML
 создаются только явным действием; clipboard failure оставляет профиль открытым для
 ручного копирования. Fake exporter всегда явно помечен как тестовый.
+При Linux CLI export UI показывает обычный профиль; текст не выдаёт sandbox QR за
+реальную ссылку. Наличие официального exporter не означает готовность production.
 Drawer section headings используют единый 17px уровень; bare oversized h2 внутри
 операционных drawers не применять. На mobile wide tables остаются в собственном scroll.
 UI states: loading, empty, failed/retry, ready, submitting, validation error, disabled.

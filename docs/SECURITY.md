@@ -21,8 +21,9 @@ Browser localStorage содержит только тему. Секретов т
 
 ## Threat model
 Злоумышленник из браузера не получает filesystem/systemd интерфейс. Даже с admin
-session будущий helper не принимает paths или commands. Компрометация web UID
-ограничивается root registry capabilities; ограничить socket peer UID и payload.
+session agent не принимает paths или commands. Компрометация web UID ограничивается
+root-owned registry capabilities и socket peer UID. Это ограничение ещё не проверено
+на Debian staging и не равно полной защите при компрометации root.
 SQL injection закрывается SQLAlchemy bind parameters; race edits — revision CAS;
 duplicate usernames — DB uniqueness. Для client с attachments metadata edit разрешён,
 а username/expiry/global enabled идут только через apply-aware paths; delete fail closed.
@@ -37,17 +38,42 @@ provider не выбирается автоматически. Operation journal
 Backup files содержат credentials и создаются только в private sandbox directory;
 retention и production restore policy ещё не реализованы.
 
-Нет native systemd provider, agent executable, sudoers, service units или production
-startup. Locks in-process, не межпроцессные. Runtime `--help` и SHA установленного
-binary не получены. Fake exporter намеренно выдаёт не настоящий `tt://`.
+Linux adapter/agent, D-Bus provider, OS locks, socket-activated units и sample
+registry реализованы, но на Windows не исполнялись с реальным host boundary.
+Production startup/import не подключался; fake exporter продолжает обслуживать
+sandbox, а Linux exporter запрашивает официальный CLI только после явной Linux
+configuration. Runtime `--help` и SHA бинарника на VPS не получены.
 
-## Обязательные проверки до Phase 5
-- Linux descriptor-based no-follow path traversal, ownership, permissions, hardlinks,
-  parent directory checks, per-inbound OS locks и privilege separation tests.
-- Helper-owned journal, OS locks и startup reconciliation после process/power loss;
-  SQLite Operation checkpoints уже проверяют sandbox crash boundaries.
-- Health должен включать service state и проверку требуемых listeners/TLS, bounded retry;
-  active systemd state сам по себе не подтверждает готовность TCP/UDP endpoint.
+Agent принимает versioned typed JSON через Unix socket, проверяет SO_PEERCRED UID,
+размеры сообщений и request ID. Root registry, managed files, binary и backup
+проходят descriptor-relative nofollow и owner/mode/link checks. Запросы не содержат
+arbitrary paths/commands. stdout CLI может содержать пароль/tt:// и возвращается
+только на явный запрос; stderr не логируется. Operation/AuditEvent остаются
+без secrets. QUIC health имеет статус `unverified`: TCP/TLS probe не доказывает
+работу UDP/HTTP3. Agent не раскрывает journal через IPC. Сбой release lock и
+неопределённый D-Bus outcome требуют operator review по Operation state.
+
+Примерные systemd units используют `NoNewPrivileges`, `PrivateTmp`,
+`ProtectHome`, `ProtectSystem=strict`, защиту kernel/control groups,
+`RestrictNamespaces`, ограничение адресных семейств и пустые capabilities.
+Web unit получает запись только в `/var/lib/tunnelui`; agent — только в
+allowlisted managed workdir, `/var/lib/tunnelui-agent` и `/run/tunnelui`.
+Agent оставлен root для записи root-owned файлов и доступа к system bus; web
+остаётся отдельным UID. `MemoryDenyWriteExecute` и остальные опции ещё нужно
+проверить на Debian с фактическими Python/dbus/TrustTunnel binary, прежде чем
+считать units пригодными к установке. Socket unit создаёт 0660 root:tunnelui;
+tmpfiles заранее создаёт root-owned runtime/backup каталоги без world write.
+
+## Обязательные проверки до production
+- Запустить Linux-only agent tests и полный CI на Linux, затем Debian 12 staging с
+  отдельным тестовым TrustTunnel instance: socket permissions/SO_PEERCRED, root registry,
+  systemd D-Bus, unit sandboxing, file owners/modes, rollback/recovery и CLI `--help`.
+- Проверить endpoint-specific health и QUIC с тестовым credential, если требуется
+  подтверждение UDP/HTTP3; текущий probe подтверждает service/TCP/TLS, QUIC — unknown.
+- Реализовать безопасный Linux discovery/adoption и unit compatibility review;
+  sample registry не является автоматическим импортом работающего endpoint.
+- Проверить backup retention, restart/recovery после power loss, audit tamper
+  resistance, master key recovery и поведение при пропавшем ответе IPC.
 - Подтверждённый способ отключить последнего клиента v1.1.0, либо безопасно
   изолировать inbound с отдельным явным подтверждением. Не вставлять dummy credentials.
 - Ограничение размера request до парсинга на reverse proxy, shared rate limit при

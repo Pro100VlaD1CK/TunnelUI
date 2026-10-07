@@ -1,5 +1,7 @@
 from typing import Protocol
 
+from tunnelui.agent.client import AgentClientError, LinuxAgentClient
+
 
 class SystemOperationError(Exception):
     pass
@@ -43,3 +45,38 @@ class FakeSystemProvider:
             self.running, self.fail_restart, self.health_results = True, False, [False, False]
         else:
             raise ValueError("unknown fake scenario")
+
+
+class LinuxSystemProvider:
+    """Unprivileged backend adapter; all host access stays in tunnelui-agent."""
+
+    def __init__(self, client: LinuxAgentClient, managed_id: str):
+        self.client = client
+        self.managed_id = managed_id
+
+    def restart(self, inbound_id: str) -> None:
+        del inbound_id
+        try:
+            self.client.restart(self.managed_id)
+        except AgentClientError as error:
+            raise SystemOperationError(error.code) from None
+
+    def reload(self, inbound_id: str) -> None:
+        del inbound_id
+        try:
+            self.client.reload(self.managed_id)
+        except AgentClientError as error:
+            raise SystemOperationError(error.code) from None
+
+    def health(self, inbound_id: str) -> bool:
+        del inbound_id
+        try:
+            return self.client.health(self.managed_id).get("healthy") is True
+        except AgentClientError as error:
+            raise SystemOperationError(error.code) from None
+
+    def status(self) -> dict[str, object]:
+        try:
+            return self.client.status(self.managed_id)
+        except AgentClientError as error:
+            raise SystemOperationError(error.code) from None

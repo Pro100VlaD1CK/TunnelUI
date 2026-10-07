@@ -1,0 +1,14 @@
+[Unit]
+Description=TunnelUI privileged agent socket
+
+[Socket]
+ListenStream=/run/tunnelui/agent.sock
+SocketUser=root
+SocketGroup=tunnelui
+SocketMode=0660
+DirectoryMode=0750
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target
+

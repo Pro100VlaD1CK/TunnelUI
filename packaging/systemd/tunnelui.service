@@ -1,0 +1,34 @@
+[Unit]
+Description=TunnelUI web backend
+After=network.target tunnelui-agent.socket
+Requires=tunnelui-agent.socket
+
+[Service]
+Type=simple
+User=tunnelui
+Group=tunnelui
+WorkingDirectory=/opt/tunnelui
+EnvironmentFile=/etc/tunnelui/tunnelui.env
+ExecStart=/opt/tunnelui/.venv/bin/python -m uvicorn tunnelui.main:create_app --factory --host 127.0.0.1 --port 8080 --no-access-log
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/tunnelui
+UMask=0077
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+

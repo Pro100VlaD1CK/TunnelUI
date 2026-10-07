@@ -17,6 +17,7 @@ test('admin: login, client CRUD, duplicate, audit, logout and responsive themes'
   await page.getByLabel('Отображаемое имя').fill('Иван · тестовая запись');
   await page.getByRole('button', { name: 'Сохранить', exact: true }).click();
   await expect(page.getByRole('cell', { name: 'test-ivan', exact: true })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Новый клиент' })).toBeHidden();
   await page.getByRole('button', { name: 'Добавить клиента' }).click();
   await page.getByLabel('Username', { exact: true }).fill('test-ivan');
   await page.getByLabel('Отображаемое имя').fill('Дубликат');

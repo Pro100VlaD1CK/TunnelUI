@@ -167,6 +167,40 @@ def test_concurrent_apply_returns_conflict(sandbox_authenticated, sandbox_app):
         runtime.coordinator.apply(inbound_id, "concurrent-apply-key", "admin")
 
 
+def test_uncertain_replace_reply_uses_existing_rollback_contract(
+    sandbox_authenticated, sandbox_app
+):
+    inbound_id = adopt(sandbox_authenticated)
+    runtime = sandbox_app.state.sandbox
+    original = runtime.environment.files["credentials"].read_bytes()
+
+    class ReplyLostAfterReplace:
+        def __init__(self, base):
+            self.base = base
+
+        def __getattr__(self, name):
+            return getattr(self.base, name)
+
+        def commit_credentials(self, operation_id):
+            self.base.commit_credentials(operation_id)
+            raise OSError("agent_unavailable")
+
+    runtime.coordinator.environments[runtime.environment.registry_id] = ReplyLostAfterReplace(
+        runtime.environment
+    )
+    client = create_client(sandbox_authenticated, "uncertain-replace")
+    response = attach(sandbox_authenticated, client["id"], inbound_id, "uncertain-replace-key")
+    assert response.status_code == 201, response.json()
+    assert response.json()["operation"]["state"] == "rolled_back"
+    assert runtime.environment.files["credentials"].read_bytes() == original
+    with sandbox_app.state.sessions() as db:
+        operation = db.scalar(select(Operation).where(
+            Operation.idempotency_key == "uncertain-replace-key"
+        ))
+        assert operation.state == "rolled_back"
+        assert operation.error_code == "agent_unavailable"
+
+
 def test_drift_is_rechecked_and_pending_attachment_is_not_active(
     sandbox_authenticated, sandbox_app
 ):

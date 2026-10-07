@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     session_seconds: int = 28800
     static_dir: Path = Path("frontend/dist")
     sandbox_root: Path | None = None
+    agent_socket: Path | None = None
+    agent_managed_id: str | None = None
+    agent_expected_version: str | None = None
+    agent_public_address: str | None = None
 
     @model_validator(mode="after")
     def secure_defaults(self):
@@ -30,4 +34,16 @@ class Settings(BaseSettings):
             raise ValueError("secure mode requires HTTPS origin")
         if self.sandbox_root is not None and not self.development:
             raise ValueError("sandbox_root requires explicit development mode")
+        agent_values = (
+            self.agent_socket,
+            self.agent_managed_id,
+            self.agent_expected_version,
+            self.agent_public_address,
+        )
+        if any(value is not None for value in agent_values) and not all(
+            value is not None for value in agent_values
+        ):
+            raise ValueError("agent settings must be configured together")
+        if self.development and self.agent_socket is not None:
+            raise ValueError("development sandbox and Linux agent are mutually exclusive")
         return self

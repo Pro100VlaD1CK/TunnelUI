@@ -70,9 +70,34 @@ Installed skill .agents/skills/impeccable, hook .codex/hooks.json.
 `/impeccable init` и другие slash commands — инструкции агента, не shell commands.
 Native engine binary gitignored; launcher при отсутствии может скачать platform engine.
 
-## Production (пока только проект)
-Native systemd web User=tunnelui и отдельный root-owned agent; никаких root web
-workers и произвольного sudo. До внедрения helper недопустимо подключать panel к
-/opt/trusttunnel. Не занимать TCP/UDP 443, 80, 22 или UDP 51820.
-Для панели отдельный HTTPS endpoint/порт, согласованный вне этого прохода.
-Реальные units, install/upgrade/rollback packaging и helper socket — Phase 5.
+## Linux boundary package (не инструкция для production install)
+`packaging/systemd/` содержит примерные web, agent и socket units;
+`packaging/tmpfiles.d/tunnelui.conf` — runtime/private каталоги;
+`packaging/agent.toml.example` — root-owned managed registry;
+`packaging/tunnelui.env.example` — web environment. Ничего из этого не
+устанавливалось на VPS. Web unit работает как `tunnelui`, слушает только loopback
+8080; agent socket принадлежит root:tunnelui (0660), agent — отдельный root
+process. Публичный HTTPS ingress не входит в этот набор. TCP/UDP 443, TCP 80/22 и
+UDP 51820 не занимаются панелью.
+
+Примеры намеренно требуют ручной подстановки путей, пользователя, hostname и
+managed ID после проверки фактического Debian staging. `ReadWritePaths` agent unit
+сейчас показывает только один `/opt/trusttunnel`; для нескольких managed services
+каждый путь и private backup root добавляются осознанно. Registry и его parent
+должны быть root-owned и не group/world-writable, конфиги — regular files без
+symlink/hardlink и с допустимыми owner/mode. Не менять права Let's Encrypt private
+key ради агента: certificate detection пока только read-only.
+
+Включение Linux composition требует одновременно `TUNNELUI_AGENT_SOCKET`,
+`TUNNELUI_AGENT_MANAGED_ID`, `TUNNELUI_AGENT_EXPECTED_VERSION` и
+`TUNNELUI_AGENT_PUBLIC_ADDRESS`; без них production-default management fail closed.
+Sandbox включается отдельно только development configuration. Прямой запуск
+`tunnelui-agent` на Windows отвергается. Не использовать несколько web workers:
+login limiter остаётся process-local.
+
+Перед какой-либо установкой нужен отдельный Debian 12 staging acceptance на
+тестовом endpoint: запустить Linux-only tests/CI, сверить `trusttunnel_endpoint
+--version` и `--help`, unit ExecStart/WorkingDirectory, владельцев и mode файлов,
+socket SO_PEERCRED, D-Bus restart job, CLI export, TCP/TLS/QUIC health, drift,
+rollback и `needs_recovery` после сбоев. Linux discovery/adoption и production
+bootstrap/reconciliation ещё не готовы; sample units не делают проект production-ready.

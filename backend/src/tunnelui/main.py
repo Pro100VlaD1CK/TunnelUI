@@ -10,6 +10,7 @@ from tunnelui.config import Settings
 from tunnelui.db import database
 from tunnelui.domain.errors import DomainError
 from tunnelui.services.auth import LoginLimiter
+from tunnelui.services.linux import LinuxRuntime
 from tunnelui.services.sandbox import SandboxRuntime
 
 
@@ -19,8 +20,8 @@ def create_app(settings: Settings | None = None):
 
     @asynccontextmanager
     async def lifespan(_):
-        if app.state.sandbox:
-            app.state.sandbox.coordinator.recover_all()
+        if app.state.management:
+            app.state.management.coordinator.recover_all()
         yield
         engine.dispose()
 
@@ -32,6 +33,22 @@ def create_app(settings: Settings | None = None):
         SandboxRuntime(settings.sandbox_root, sessions, settings.master_key_file)
         if settings.development and settings.sandbox_root else None
     )
+    app.state.linux = (
+        LinuxRuntime(
+            settings.agent_socket,
+            settings.agent_managed_id,
+            settings.agent_expected_version,
+            settings.agent_public_address,
+            sessions,
+            settings.master_key_file,
+        )
+        if settings.agent_socket is not None
+        and settings.agent_managed_id is not None
+        and settings.agent_expected_version is not None
+        and settings.agent_public_address is not None
+        else None
+    )
+    app.state.management = app.state.sandbox or app.state.linux
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):

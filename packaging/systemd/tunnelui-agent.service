@@ -1,0 +1,29 @@
+[Unit]
+Description=TunnelUI privileged agent
+Requires=tunnelui-agent.socket
+After=dbus.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/opt/tunnelui/.venv/bin/tunnelui-agent --config /etc/tunnelui/agent.toml
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/opt/trusttunnel /var/lib/tunnelui-agent /run/tunnelui
+UMask=0077
+Restart=on-failure
+RestartSec=3
+

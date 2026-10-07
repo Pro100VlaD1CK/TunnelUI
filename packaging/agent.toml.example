@@ -1,0 +1,21 @@
+backend_user = "tunnelui"
+lock_directory = "/run/tunnelui/locks"
+
+[managed.primary]
+service = "trusttunnel.service"
+working_directory = "/opt/trusttunnel"
+binary = "/opt/trusttunnel/trusttunnel_endpoint"
+vpn = "/opt/trusttunnel/vpn.toml"
+hosts = "/opt/trusttunnel/hosts.toml"
+credentials = "/opt/trusttunnel/credentials.toml"
+rules = "/opt/trusttunnel/rules.toml"
+backup_root = "/var/lib/tunnelui-agent/backups/primary"
+public_address = "vpn.example.invalid:443"
+expected_version = "1.1.0"
+health_host = "127.0.0.1"
+health_port = 443
+tls_server_name = "vpn.example.invalid"
+quic_configured = true
+allow_reload = false
+owner_uid = 0
+

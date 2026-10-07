@@ -26,8 +26,16 @@ from tunnelui.services.attachments import AttachmentService
 from tunnelui.services.audit import record
 from tunnelui.services.clients import ClientService
 from tunnelui.services.operations import active_operation, operation_output
+from tunnelui.system.provider import SystemOperationError
 
 router = APIRouter(prefix="/api")
+
+
+def management(request: Request):
+    runtime = request.app.state.management
+    if runtime is None:
+        raise DomainError("sandbox_unavailable", 503)
+    return runtime
 
 
 def sandbox(request: Request):
@@ -117,7 +125,7 @@ def delete_client(client_id: str, revision: int = Query(ge=1),
 @router.put("/clients/{client_id}/access")
 def client_access(client_id: str, data: ClientAccess, request: Request,
                   identity=Depends(admin), db=Depends(db_session)):
-    runtime = sandbox(request)
+    runtime = management(request)
     client = db.get(Client, client_id)
     if not client:
         raise DomainError("client_not_found", 404)
@@ -154,7 +162,7 @@ def client_access(client_id: str, data: ClientAccess, request: Request,
 @router.get("/inbounds")
 def inbounds(request: Request, _=Depends(admin), db=Depends(db_session)):
     rows = db.scalars(select(Inbound).order_by(Inbound.name)).all()
-    runtime = request.app.state.sandbox
+    runtime = request.app.state.management
     items = []
     for row in rows:
         metadata = json.loads(row.metadata_json or "{}")
@@ -164,7 +172,13 @@ def inbounds(request: Request, _=Depends(admin), db=Depends(db_session)):
         current = active_operation(db, row.id)
         service_status = "unknown"
         if runtime and row.registry_id == runtime.environment.registry_id:
-            service_status = "running" if runtime.provider.running else "stopped"
+            if hasattr(runtime.provider, "running"):
+                service_status = "running" if runtime.provider.running else "stopped"
+            else:
+                try:
+                    service_status = "running" if runtime.provider.status()["running"] else "stopped"
+                except SystemOperationError:
+                    service_status = "unknown"
         items.append({
             "id": row.id, "name": row.name, "kind": row.kind, "enabled": row.enabled,
             "version": metadata.get("version"), "listen_address": metadata.get("listen_address"),
@@ -173,9 +187,9 @@ def inbounds(request: Request, _=Depends(admin), db=Depends(db_session)):
             "service_status": service_status,
             "operation": operation_output(current) if current else None,
         })
-    return {"items": items, "adoption_available": bool(runtime) and not any(
+    return {"items": items, "adoption_available": bool(request.app.state.sandbox) and not any(
         row.registry_id == runtime.environment.registry_id for row in rows
-    )}
+    ) if runtime else False}
 
 
 @router.get("/inbounds/{inbound_id}")
@@ -190,10 +204,16 @@ def inbound_detail(inbound_id: str, request: Request, _=Depends(admin), db=Depen
     operations = db.scalars(select(Operation).where(
         Operation.inbound_id == inbound_id
     ).order_by(Operation.created_at.desc()).limit(20)).all()
-    runtime = request.app.state.sandbox
+    runtime = request.app.state.management
     service_status = "unknown"
     if runtime and row.registry_id == runtime.environment.registry_id:
-        service_status = "running" if runtime.provider.running else "stopped"
+        if hasattr(runtime.provider, "running"):
+            service_status = "running" if runtime.provider.running else "stopped"
+        else:
+            try:
+                service_status = "running" if runtime.provider.status()["running"] else "stopped"
+            except SystemOperationError:
+                service_status = "unknown"
     return {
         "id": row.id, "name": row.name, "enabled": row.enabled,
         "kind": row.kind, "public_address": row.public_address,
@@ -234,7 +254,7 @@ def trusttunnel_confirm(data: AdoptionConfirm, request: Request,
 @router.post("/clients/{client_id}/attachments", status_code=201)
 def attach_client(client_id: str, data: AttachmentCreate, request: Request,
                   identity=Depends(admin), db=Depends(db_session)):
-    runtime = sandbox(request)
+    runtime = management(request)
     attachment_id, operation = AttachmentService(
         db, identity.username, runtime.coordinator.box, runtime.coordinator
     ).create(
@@ -247,7 +267,7 @@ def attach_client(client_id: str, data: AttachmentCreate, request: Request,
 @router.put("/attachments/{attachment_id}")
 def update_attachment(attachment_id: str, data: AttachmentState, request: Request,
                       identity=Depends(admin), db=Depends(db_session)):
-    runtime = sandbox(request)
+    runtime = management(request)
     operation = AttachmentService(
         db, identity.username, runtime.coordinator.box, runtime.coordinator
     ).set_enabled(attachment_id, data.enabled, data.revision, data.idempotency_key)
@@ -257,7 +277,7 @@ def update_attachment(attachment_id: str, data: AttachmentState, request: Reques
 @router.delete("/attachments/{attachment_id}")
 def detach_client(attachment_id: str, data: AttachmentDetach, request: Request,
                   identity=Depends(admin), db=Depends(db_session)):
-    runtime = sandbox(request)
+    runtime = management(request)
     operation = AttachmentService(
         db, identity.username, runtime.coordinator.box, runtime.coordinator
     ).detach(attachment_id, data.revision, data.idempotency_key)
@@ -266,30 +286,30 @@ def detach_client(attachment_id: str, data: AttachmentDetach, request: Request,
 
 @router.post("/inbounds/{inbound_id}/drift")
 def check_drift(inbound_id: str, request: Request, _=Depends(admin)):
-    return sandbox(request).coordinator.check_drift(inbound_id)
+    return management(request).coordinator.check_drift(inbound_id)
 
 
 @router.post("/inbounds/{inbound_id}/cancel-pending", status_code=204)
 def cancel_pending(inbound_id: str, request: Request, _=Depends(admin)):
-    sandbox(request).coordinator.cancel_pending(inbound_id)
+    management(request).coordinator.cancel_pending(inbound_id)
 
 
 @router.post("/inbounds/{inbound_id}/reimport")
 def reimport_inbound(inbound_id: str, request: Request, identity=Depends(admin)):
-    return sandbox(request).coordinator.reimport(inbound_id, identity.username)
+    return management(request).coordinator.reimport(inbound_id, identity.username)
 
 
 @router.post("/inbounds/{inbound_id}/restart")
 def restart_inbound(inbound_id: str, data: IdempotentAction, request: Request,
                     identity=Depends(admin)):
-    return {"operation": sandbox(request).coordinator.restart(
+    return {"operation": management(request).coordinator.restart(
         inbound_id, data.idempotency_key, identity.username
     )}
 
 
 @router.post("/operations/{operation_id}/recover")
 def recover_operation(operation_id: str, request: Request, identity=Depends(admin)):
-    return {"operation": sandbox(request).coordinator.recover(
+    return {"operation": management(request).coordinator.recover(
         operation_id, identity.username
     )}
 
@@ -311,7 +331,7 @@ def unmanage_inbound(inbound_id: str, identity=Depends(admin), db=Depends(db_ses
 @router.post("/clients/{client_id}/profiles/trusttunnel")
 def export_profile(client_id: str, data: ExportRequest, request: Request,
                    _=Depends(admin), db=Depends(db_session)):
-    runtime = sandbox(request)
+    runtime = management(request)
     row = db.execute(select(Client, Attachment, Inbound).join(
         Attachment, Attachment.client_id == Client.id
     ).join(Inbound, Inbound.id == Attachment.inbound_id).where(
@@ -323,7 +343,7 @@ def export_profile(client_id: str, data: ExportRequest, request: Request,
     client, _attachment, inbound = row
     exported = runtime.exporter.export(client.username, inbound.public_address or "", data.format)
     return {"format": exported.format, "content": exported.content,
-            "media_type": exported.media_type, "sandbox": True}
+            "media_type": exported.media_type, "sandbox": request.app.state.sandbox is not None}
 
 
 @router.post("/dev/fake-scenario", status_code=204)

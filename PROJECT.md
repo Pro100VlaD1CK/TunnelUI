@@ -1,6 +1,6 @@
 # TunnelUI
 
-Главный технический документ. Состояние на 2026-10-05. Product context — `PRODUCT.md`,
+Главный технический документ. Состояние на 2026-10-07. Product context — `PRODUCT.md`,
 визуальная система — `DESIGN.md`. Production, VPS и работающие сервисы в этом проходе
 не подключались и не изменялись.
 
@@ -17,10 +17,12 @@ React / TypeScript / Vite / Ant Design / TanStack Query. Backend не долже
 interfaces. DB, файлы и сервис не образуют общей транзакции, поэтому состояние
 разделено на desired/applied/sync и фиксируется durable `Operation` journal.
 
-Текущий рабочий контур управления намеренно только локальный: explicit sandbox
-composition создаёт `FakeSystemProvider`, sandbox-файлы и fake exporter. При обычной
-production-default конфигурации management endpoints fail closed с 503 и никакого
-скрытого fake fallback нет. Подробности — `docs/ARCHITECTURE.md`.
+Phase 2 sandbox composition сохраняет `FakeSystemProvider`, sandbox-файлы и fake
+exporter. Новый Linux boundary встраивает `LinuxManagedEnvironment` за тем же
+coordinator и вызывает отдельный root-owned `tunnelui-agent` по Unix socket только
+при полной explicit agent configuration. Без неё production-default management
+fail closed с 503; скрытого fake fallback нет. Linux code пока не проходил Debian
+staging. Подробности — `docs/ARCHITECTURE.md`.
 
 ## Компоненты
 - `backend/src/tunnelui`: API, domain, services, repositories, integrations, system adapters.
@@ -29,6 +31,9 @@ production-default конфигурации management endpoints fail closed с 
 - `frontend/src`: app shell, shared API/types и features auth/inbounds/clients/profiles/audit/settings.
 - `frontend/e2e`: Chromium-пути Phase 1/2, recovery, mobile и accessibility smoke checks.
 - `.agents/skills/impeccable`: project-local design/UX skill; Ant Design остаётся библиотекой компонентов.
+- `backend/src/tunnelui/agent`: versioned IPC, registry, OS lock, безопасные файлы,
+  systemd D-Bus, health, официальный CLI exporter и socket server.
+- `packaging`: примерные systemd/socket units, tmpfiles, registry и env; не установлены.
 
 ## Модель данных
 `Admin`, `AdminSession`, `Client`, `Inbound`, `Attachment`, `Operation`, `AuditEvent`.
@@ -45,10 +50,15 @@ API token или private key. AuditEvent — отдельная сущность
 
 ## TrustTunnel integration
 Проверен официальный tag v1.1.0, commit `fab5b8353a19332f935fa30869307d37d4a898d1`.
-Локальный workflow: Detect → Parse → Preview → Confirm adoption → backup → сохранить
+Sandbox workflow: Detect → Parse → Preview → Confirm adoption → backup → сохранить
 metadata/hashes и зашифрованные attachments. Adoption не переписывает исходные config
 или service unit. Relative paths разрешаются от WorkingDirectory. Username collision,
 unknown credential fields и unknown version fail closed.
+
+Linux agent читает только root-owned allowlisted registry, не принимает arbitrary
+path/command, делает snapshots/backup/atomic credentials replace/restore, D-Bus
+restart/status, structured health и официальный CLI export. Linux discovery/adoption
+ещё отсутствует, поэтому существующий service на VPS не импортировался.
 
 Credentials считаются требующими restart. SIGHUP подтверждён только для TLS hosts.
 Официальный CLI contract: `binary vpn.toml hosts.toml -c USER -a ADDRESS --format
@@ -74,9 +84,10 @@ AuditEvent или Operation. Sandbox endpoints доступны только п�
 production default fail closed. Полная модель — `docs/SECURITY.md`.
 
 ## Configuration apply workflow
-`ApplyCoordinator` сериализует операции per inbound внутри процесса, проверяет drift
+`ApplyCoordinator` сериализует операции per inbound внутри процесса, Linux agent
+добавляет межпроцессный `flock` и peer PID reservation. Coordinator проверяет drift
 по сохранённым hashes, валидирует render до изменения DB/files, создаёт private backup,
-пишет same-directory temp с fsync и atomic replace, вызывает fake restart/health,
+пишет same-directory temp с fsync и atomic replace, вызывает provider restart/health,
 фиксирует checkpoints в Operation и обновляет applied state/hashes после успеха.
 
 При health/restart failure coordinator восстанавливает operation-owned backup,
@@ -85,8 +96,10 @@ production default fail closed. Полная модель — `docs/SECURITY.md`
 Drift блокирует overwrite и допускает re-import только при точном сопоставлении
 username либо отмену pending state. Concurrent apply возвращает видимую ошибку.
 
-Это проверенный sandbox workflow. Production требует межпроцессный lock, root-owned
-registry, descriptor-based path validation и privileged helper.
+Это проверенный sandbox workflow и реализованный Linux adapter, но Linux side effects
+пока проверены только кодом/тестами, не на Debian staging. При потерянном ответе после
+rename coordinator исходит из возможного replace и делает rollback; при crash после
+prepare restore удаляет operation-owned temp. Production требует staging acceptance.
 
 ## Текущая инфраструктура
 Только данные пользователя, без live detection: Debian 12, `fi-zanevka-pnv`,
@@ -109,34 +122,42 @@ SSH TCP 22, Certbot TCP 80; 3x-ui v3.8.5. Эти сервисы не трога�
   к inbound после partial apply; внутренние state labels локализованы.
 - Windows Impeccable hook wrapper сохранён и проверялся отдельно; detector текущей
   поверхности возвращает 0 findings.
+- Phase 3 Linux boundary code: explicit Linux composition за существующим coordinator,
+  root agent с SO_PEERCRED, typed/bounded Unix IPC, root registry, descriptor/no-follow
+  files и backup, OS lock, systemd D-Bus, bounded CLI export и structured health.
+  Примерные units/tmpfiles/registry и Linux CI job добавлены, но не развернуты.
 
 ## Сейчас в работе
-Текущий проход завершает Phase 2 sandbox quality gate и не начинает Linux/production
-этап. Проверки 2026-10-05: Ruff pass; pytest **79 passed**; TypeScript pass;
-Vitest **3 passed**; Vite production build pass; Playwright Chromium **6 passed**.
-Impeccable detector: 0 findings; независимый audit: **15/20 (Good)**. Исправлены
-неоднозначный multi-inbound profile export, recovery navigation, локализация состояний,
-clipboard failure handling и вводящие в заблуждение действия.
+Текущий проход — Phase 3 Linux boundary hardening без VPS/production. Phase 2 sandbox
+не переписан. Windows local tests и Linux CI configuration проверяются; фактический
+Linux CI run и Debian staging acceptance ещё не выполнялись. Локальный прогон
+2026-10-07: Ruff pass; pytest **99 passed, 10 Linux-only skipped**; TypeScript pass;
+Vitest **3 passed**; Vite build pass; Playwright Chromium **6 passed**;
+Impeccable detector Profiles **0 findings**. Windows sandbox `esbuild spawn EPERM`
+потребовал повторить Vitest/Vite/Playwright в разрешённом project-local контексте.
 
 ## Следующие задачи
 1. Завершить оставшийся Phase 2 product scope: durable expiry scheduler/jobs и
    безопасное применение username/expiry для уже привязанных клиентов.
-2. Спроектировать Linux boundary: privileged helper, root-owned registry, systemd D-Bus,
-   OS locks и descriptor-based filesystem checks; только в отдельном разрешённом этапе.
-3. Phase 3: реальные TrustTunnel CLI exports, metrics `/clients`, Rules и Profiles runtime.
+2. Запустить Linux CI и Debian 12 staging acceptance на отдельном test endpoint;
+   проверить socket/permissions, D-Bus, CLI, health, rollback/recovery и unit sandboxing.
+3. Завершить Linux discovery/adoption и production bootstrap; затем Phase 3 metrics
+   `/clients`, Rules и Profiles runtime. CLI exporter написан, но не проверен на VPS.
 4. Phase 4: 3x-ui auth/API, external inbound sync и Mihomo subscription.
-5. Phase 5: packaging, systemd units, staging acceptance и deployment docs.
+5. Phase 5: installation/upgrade/rollback packaging, staging acceptance и deployment.
 
 ## Известные ограничения
-- Все host-management действия сейчас fake и работают только с sandbox files/provider.
-  Реальных systemd, TrustTunnel, VPS и 3x-ui вызовов нет.
-- Locks только in-process. Global client access по нескольким inbound выполняется
+- Host-management в подключённом sandbox остаётся fake. Linux adapter существует,
+  но не исполнялся на Debian и не подключался к VPS; 3x-ui остаётся read-only adapter.
+- Sandbox locks in-process; Linux agent использует flock per managed ID. Global client
+  access по нескольким inbound выполняется
   последовательно, без общей атомарной транзакции и cross-inbound recovery.
 - Expiry учитывается renderer, но автоматического durable scheduler/revoke пока нет.
 - Username/expiry attached client нельзя менять через текущий UI; metadata можно.
 - Пустой `credentials.toml` не поддерживается TrustTunnel v1.1.0, поэтому последний
   active client нельзя отключить или отвязать без отдельного проверенного решения.
-- Fake exporter намеренно не создаёт реальный `tt://`; production adapter к CLI отсутствует.
+- Fake exporter намеренно не создаёт реальный `tt://`; Linux exporter использует
+  официальный CLI, но runtime binary на VPS ещё не проверен.
 - Re-import поддерживает только неизменившийся набор username; explicit mapping UI нет.
 - Нет metrics/runtime traffic, rules editor, certificate management, backup retention,
   3x-ui writes и Mihomo subscriptions.
@@ -147,9 +168,14 @@ clipboard failure handling и вводящие в заблуждение дей�
   выполняет его через активный PowerShell. `.codex/impeccable-hook.cmd` задаёт явную
   cmd.exe-границу, передаёт stdin и сохраняет exit code. После update повторно проверить
   manifest и одобрение через `/hooks`.
+- Linux agent пока не умеет discovery/adoption, certificate detection, journal API,
+  backup retention; QUIC health обозначен `unverified`, а не healthy. IPC request ID
+  не дедуплицирует повторное действие; durable idempotency принадлежит coordinator.
+- Linux-only tests пропускаются на Windows; GitHub Actions job настроен, но фактический
+  Linux run ещё не подтверждён. Docker Linux engine и WSL здесь недоступны.
 
 ## Принятые архитектурные решения
-- ADR-001 active: production host integration через минимальный privileged helper; web без root.
+- ADR-001 active: host integration через минимальный privileged helper; web без root.
 - ADR-002 active: capabilities по точной версии; unknown fail closed.
 - ADR-003 active: SQLite v1, UTC timestamps, Alembic migrations.
 - ADR-004 active: desired/applied/sync state, потому что DB/files/service не одна транзакция.
@@ -161,13 +187,18 @@ clipboard failure handling и вводящие в заблуждение дей�
   default не подменяется FakeSystemProvider.
 - ADR-010 active: Operation — durable технический journal, AuditEvent — отдельный
   пользовательский безопасный журнал; ни один не хранит secrets.
+- ADR-011 active: Linux agent — только explicit composition за существующим
+  coordinator; root-owned registry + UID-checked Unix IPC + per-inbound flock.
+- ADR-012 active: health подтверждает service/TCP/TLS, QUIC остаётся `unverified`
+  без credential-bearing functional probe; успех health не означает доказанный HTTP/3.
 Изменённые решения помечаются superseded и дополняются заменой, история не стирается.
 
 ## Deployment notes
 Deployment не выполнялся. Dev работает на loopback и explicit sandbox configuration.
-Будущий web unit — `User=tunnelui`; helper socket доступен только этому UID и принимает
-typed operation IDs вместо пользовательских paths/commands. Панель не занимает 443.
-DB backup и master-key backup хранятся раздельно. `docs/DEPLOYMENT.md` пока только план.
+Примерный web unit — `User=tunnelui`; socket root:tunnelui 0660, agent root с
+ограниченным registry/paths и typed operation IDs. Панель не занимает 443.
+DB backup и master-key backup хранятся раздельно. `docs/DEPLOYMENT.md` содержит
+примерные units и staging gate, а не инструкцию немедленного production install.
 
 ## Changelog
 - 2026-10-01: Phase 0, version-pinned research, архитектура, документы и project-local Impeccable.
@@ -178,3 +209,6 @@ DB backup и master-key backup хранятся раздельно. `docs/DEPLOY
   durable operations/recovery, drift/rollback, profiles/export и Playwright coverage.
 - 2026-10-05: Impeccable critique/audit/harden/polish: локализованы состояния,
   устранена неоднозначность multi-inbound export и добавлен прямой recovery path.
+- 2026-10-07: Phase 3 Linux boundary реализован за существующими interfaces:
+  root-owned agent/registry/socket, safe file operations, D-Bus, locks, CLI exporter,
+  health, Linux CI configuration и unit examples. Production/VPS не затронуты.

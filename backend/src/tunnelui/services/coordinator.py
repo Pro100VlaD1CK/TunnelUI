@@ -1,8 +1,11 @@
 import hashlib
 import json
 import time
-from dataclasses import dataclass
+import uuid
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -26,11 +29,26 @@ from tunnelui.services.operations import (
     transition,
 )
 from tunnelui.system.files import atomic_replace, commit_atomic, prepare_atomic, private_backup
-from tunnelui.system.provider import FakeSystemProvider, SystemOperationError
+from tunnelui.system.provider import FakeSystemProvider, SystemOperationError, SystemProvider
 
 
 class SimulatedCrash(BaseException):
     """Test-only power-loss signal that deliberately bypasses workflow exception handling."""
+
+
+class ManagedEnvironment(Protocol):
+    registry_id: str
+    provider: SystemProvider
+    version: str
+    public_address: str
+
+    def snapshot(self) -> dict[str, bytes]: ...
+    def operation(self, operation_id: str): ...
+    def create_backup(self, operation_id: str, snapshot: dict[str, bytes]) -> None: ...
+    def prepare_credentials(self, operation_id: str, content: bytes) -> None: ...
+    def commit_credentials(self, operation_id: str) -> None: ...
+    def restore_credentials(self, operation_id: str) -> None: ...
+    def cleanup(self, operation_id: str) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -43,6 +61,7 @@ class SandboxEnvironment:
     exec_start: list[str]
     version: str
     public_address: str
+    _prepared: dict[str, Path] = field(default_factory=dict, compare=False, repr=False)
 
     def snapshot(self) -> dict[str, bytes]:
         result = {}
@@ -52,14 +71,41 @@ class SandboxEnvironment:
             result[key] = path.read_bytes()
         return result
 
+    @contextmanager
+    def operation(self, operation_id: str):
+        del operation_id
+        yield
+
+    def create_backup(self, operation_id: str, snapshot: dict[str, bytes]) -> None:
+        private_backup(self.backup_root, operation_id, snapshot)
+
+    def prepare_credentials(self, operation_id: str, content: bytes) -> None:
+        self._prepared[operation_id] = prepare_atomic(
+            self.files["credentials"], content, operation_id
+        )
+
+    def commit_credentials(self, operation_id: str) -> None:
+        commit_atomic(self.files["credentials"], self._prepared.pop(operation_id))
+
+    def restore_credentials(self, operation_id: str) -> None:
+        backup = self.backup_root / operation_id / "credentials"
+        atomic_replace(self.files["credentials"], backup.read_bytes())
+
+    def cleanup(self, operation_id: str) -> None:
+        temp = self._prepared.pop(operation_id, None)
+        if temp:
+            temp.unlink(missing_ok=True)
+        candidate = self.files["credentials"].parent / (
+            f".tunnelui-{operation_id}-{self.files['credentials'].name}"
+        )
+        candidate.unlink(missing_ok=True)
+
 
 class TrustTunnelCoordinator:
-    """Durable sandbox apply coordinator; it cannot execute a real process or systemd."""
+    """Durable apply coordinator; privileged effects stay behind an environment."""
 
     def __init__(self, sessions: sessionmaker, box: SecretBox,
-                 environments: dict[str, SandboxEnvironment], locks: InboundLocks | None = None):
-        if any(type(item.provider) is not FakeSystemProvider for item in environments.values()):
-            raise ValueError("sandbox coordinator only accepts FakeSystemProvider")
+                 environments: dict[str, ManagedEnvironment], locks: InboundLocks | None = None):
         self.sessions = sessions
         self.box = box
         self.environments = environments
@@ -71,7 +117,7 @@ class TrustTunnelCoordinator:
             self.interrupt_at = None
             raise SimulatedCrash(checkpoint)
 
-    def environment(self, inbound: Inbound) -> SandboxEnvironment:
+    def environment(self, inbound: Inbound) -> ManagedEnvironment:
         environment = self.environments.get(inbound.registry_id or "")
         if environment is None:
             raise DomainError("sandbox_environment_unavailable", 503)
@@ -123,77 +169,93 @@ class TrustTunnelCoordinator:
                     raise DomainError("idempotency_conflict")
                 return operation_output(existing)
             with self.locks.acquire(inbound_id):
-                if active_operation(db, inbound_id):
-                    raise DomainError("operation_in_progress")
-                original = environment.snapshot()
-                current_hashes = {key: source_hash(value) for key, value in original.items()}
-                expected = hashes(inbound.hashes_json)
-                operation = Operation(
-                    inbound_id=inbound_id, kind=kind, state="pending",
-                    idempotency_key=idempotency_key, request_fingerprint=fingerprint,
-                    expected_hashes_json=json.dumps(current_hashes), result_hashes_json="{}",
-                )
-                db.add(operation)
-                db.commit()
-                self._interrupt("before_backup")
-                transition(db, operation, "preparing")
-                self._interrupt("after_preparing")
-                if current_hashes != expected:
-                    inbound.config_state = "drift"
-                    inbound.updated_at = now()
-                    transition(db, operation, "failed", "drift_conflict")
-                    record_result(db, admin, "config.apply", "inbound", inbound_id,
-                                  "error", "Не удалось применить конфигурацию")
+                operation_id = str(uuid.uuid4())
+                with environment.operation(operation_id):
+                    if active_operation(db, inbound_id):
+                        raise DomainError("operation_in_progress")
+                    original = environment.snapshot()
+                    current_hashes = {key: source_hash(value) for key, value in original.items()}
+                    expected = hashes(inbound.hashes_json)
+                    operation = Operation(
+                        id=operation_id,
+                        inbound_id=inbound_id, kind=kind, state="pending",
+                        idempotency_key=idempotency_key, request_fingerprint=fingerprint,
+                        expected_hashes_json=json.dumps(current_hashes), result_hashes_json="{}",
+                    )
+                    db.add(operation)
                     db.commit()
-                    raise DomainError("drift_conflict")
-                private_backup(environment.backup_root, operation.id, original)
-                operation.backup_id = operation.id
-                db.commit()
-                transition(db, operation, "backed_up")
-                self._interrupt("after_backup")
-                temp: Path | None = None
-                changed = False
-                try:
-                    temp = prepare_atomic(environment.files["credentials"], content, operation.id)
-                    transition(db, operation, "writing")
-                    self._interrupt("after_temp_write")
-                    commit_atomic(environment.files["credentials"], temp)
-                    temp = None
-                    changed = True
-                    transition(db, operation, "applying")
-                    self._interrupt("after_replace")
-                    environment.provider.restart(inbound_id)
-                    transition(db, operation, "checking")
-                    self._interrupt("after_restart")
-                    self._interrupt("during_health")
-                    if not environment.provider.health(inbound_id):
-                        raise SystemOperationError("health_failed")
-                except SimulatedCrash:
-                    raise
-                except (OSError, SystemOperationError) as error:
-                    if temp:
-                        temp.unlink(missing_ok=True)
-                    if not changed:
-                        transition(db, operation, "failed", str(error))
-                        self._mark_error(db, inbound_id)
+                    self._interrupt("before_backup")
+                    transition(db, operation, "preparing")
+                    self._interrupt("after_preparing")
+                    if current_hashes != expected:
+                        inbound.config_state = "drift"
+                        inbound.updated_at = now()
+                        transition(db, operation, "failed", "drift_conflict")
                         record_result(db, admin, "config.apply", "inbound", inbound_id,
                                       "error", "Не удалось применить конфигурацию")
                         db.commit()
-                        return operation_output(operation)
-                    return self._rollback(db, inbound, operation, environment, admin, str(error))
-                result = environment.snapshot()
-                result_hashes = {key: source_hash(value) for key, value in result.items()}
-                operation.result_hashes_json = json.dumps(result_hashes)
-                inbound.hashes_json = operation.result_hashes_json
-                inbound.config_state = "synced"
-                inbound.updated_at = now()
-                self._mark_applied(db, inbound_id)
-                db.commit()
-                transition(db, operation, "succeeded")
-                record_result(db, admin, "config.apply", "inbound", inbound_id,
-                              "success", "Конфигурация применена, сервис отвечает")
-                db.commit()
-                return operation_output(operation)
+                        raise DomainError("drift_conflict")
+                    environment.create_backup(operation.id, original)
+                    operation.backup_id = operation.id
+                    db.commit()
+                    transition(db, operation, "backed_up")
+                    self._interrupt("after_backup")
+                    changed = False
+                    try:
+                        environment.prepare_credentials(operation.id, content)
+                        transition(db, operation, "writing")
+                        self._interrupt("after_temp_write")
+                        changed = True
+                        # A lost agent reply after rename leaves the replace outcome
+                        # unknown. Treat the boundary as changed and use the backup.
+                        environment.commit_credentials(operation.id)
+                        transition(db, operation, "applying")
+                        self._interrupt("after_replace")
+                        environment.provider.restart(inbound_id)
+                        transition(db, operation, "checking")
+                        self._interrupt("after_restart")
+                        self._interrupt("during_health")
+                        if not environment.provider.health(inbound_id):
+                            raise SystemOperationError("health_failed")
+                    except SimulatedCrash:
+                        raise
+                    except (OSError, SystemOperationError) as error:
+                        if not changed:
+                            try:
+                                environment.cleanup(operation.id)
+                            except OSError:
+                                inbound.config_state = "recovery_required"
+                                inbound.updated_at = now()
+                                db.commit()
+                                transition(db, operation, "needs_recovery", "cleanup_failed")
+                                record_result(
+                                    db, admin, "config.apply", "inbound", inbound_id,
+                                    "error", "Операция требует восстановления"
+                                )
+                                db.commit()
+                                return operation_output(operation)
+                            transition(db, operation, "failed", str(error))
+                            self._mark_error(db, inbound_id)
+                            record_result(db, admin, "config.apply", "inbound", inbound_id,
+                                          "error", "Не удалось применить конфигурацию")
+                            db.commit()
+                            return operation_output(operation)
+                        return self._rollback(
+                            db, inbound, operation, environment, admin, str(error)
+                        )
+                    result = environment.snapshot()
+                    result_hashes = {key: source_hash(value) for key, value in result.items()}
+                    operation.result_hashes_json = json.dumps(result_hashes)
+                    inbound.hashes_json = operation.result_hashes_json
+                    inbound.config_state = "synced"
+                    inbound.updated_at = now()
+                    self._mark_applied(db, inbound_id)
+                    db.commit()
+                    transition(db, operation, "succeeded")
+                    record_result(db, admin, "config.apply", "inbound", inbound_id,
+                                  "success", "Конфигурация применена, сервис отвечает")
+                    db.commit()
+                    return operation_output(operation)
 
     def check_drift(self, inbound_id: str) -> dict:
         with self.sessions() as db:
@@ -273,33 +335,42 @@ class TrustTunnelCoordinator:
                     raise DomainError("idempotency_conflict")
                 return operation_output(existing)
             with self.locks.acquire(inbound_id):
-                if active_operation(db, inbound_id):
-                    raise DomainError("operation_in_progress")
-                expected = {key: source_hash(value) for key, value in environment.snapshot().items()}
-                operation = Operation(
-                    inbound_id=inbound_id, kind="restart", state="pending",
-                    idempotency_key=idempotency_key, request_fingerprint=fingerprint,
-                    expected_hashes_json=json.dumps(expected), result_hashes_json="{}",
-                )
-                db.add(operation)
-                db.commit()
-                transition(db, operation, "preparing")
-                transition(db, operation, "applying")
-                try:
-                    environment.provider.restart(inbound_id)
-                    transition(db, operation, "checking")
-                    if not environment.provider.health(inbound_id):
-                        raise SystemOperationError("health_failed")
-                except SystemOperationError as error:
-                    inbound.config_state = "error"
+                operation_id = str(uuid.uuid4())
+                with environment.operation(operation_id):
+                    if active_operation(db, inbound_id):
+                        raise DomainError("operation_in_progress")
+                    expected = {
+                        key: source_hash(value) for key, value in environment.snapshot().items()
+                    }
+                    operation = Operation(
+                        id=operation_id,
+                        inbound_id=inbound_id, kind="restart", state="pending",
+                        idempotency_key=idempotency_key, request_fingerprint=fingerprint,
+                        expected_hashes_json=json.dumps(expected), result_hashes_json="{}",
+                    )
+                    db.add(operation)
                     db.commit()
-                    transition(db, operation, "failed", str(error))
-                    record_result(db, admin, "service.restart", "inbound", inbound_id, "error")
-                else:
-                    transition(db, operation, "succeeded")
-                    record_result(db, admin, "service.restart", "inbound", inbound_id, "success")
-                db.commit()
-                return operation_output(operation)
+                    transition(db, operation, "preparing")
+                    transition(db, operation, "applying")
+                    try:
+                        environment.provider.restart(inbound_id)
+                        transition(db, operation, "checking")
+                        if not environment.provider.health(inbound_id):
+                            raise SystemOperationError("health_failed")
+                    except SystemOperationError as error:
+                        inbound.config_state = "error"
+                        db.commit()
+                        transition(db, operation, "failed", str(error))
+                        record_result(
+                            db, admin, "service.restart", "inbound", inbound_id, "error"
+                        )
+                    else:
+                        transition(db, operation, "succeeded")
+                        record_result(
+                            db, admin, "service.restart", "inbound", inbound_id, "success"
+                        )
+                    db.commit()
+                    return operation_output(operation)
 
     def _mark_applied(self, db: Session, inbound_id: str) -> None:
         for attachment in db.scalars(select(Attachment).where(
@@ -325,13 +396,13 @@ class TrustTunnelCoordinator:
             attachment.updated_at = now()
 
     def _rollback(self, db: Session, inbound: Inbound, operation: Operation,
-                  environment: SandboxEnvironment, admin: str, cause: str) -> dict:
+                  environment: ManagedEnvironment, admin: str, cause: str) -> dict:
         if operation.state != "rolling_back":
             transition(db, operation, "rolling_back", cause)
         self._interrupt("during_rollback")
         try:
-            backup = environment.backup_root / operation.id / "credentials"
-            atomic_replace(environment.files["credentials"], backup.read_bytes())
+            environment.cleanup(operation.id)
+            environment.restore_credentials(operation.id)
             environment.provider.restart(inbound.id)
             if not environment.provider.health(inbound.id):
                 raise SystemOperationError("rollback_health_failed")
@@ -373,13 +444,12 @@ class TrustTunnelCoordinator:
             if not inbound:
                 raise DomainError("inbound_not_found", 404)
             environment = self.environment(inbound)
-            with self.locks.acquire(inbound.id):
-                current = {key: source_hash(value) for key, value in environment.snapshot().items()}
+            with self.locks.acquire(inbound.id), environment.operation(operation.id):
+                current = {
+                    key: source_hash(value) for key, value in environment.snapshot().items()
+                }
                 expected = hashes(operation.expected_hashes_json)
-                for temp in environment.files["credentials"].parent.glob(
-                    f".tunnelui-{operation.id}-*"
-                ):
-                    temp.unlink(missing_ok=True)
+                environment.cleanup(operation.id)
                 if operation.state in {"pending", "preparing"} or (
                     operation.state in {"backed_up", "writing"} and current == expected
                 ):
@@ -397,5 +467,6 @@ class TrustTunnelCoordinator:
                     operation.state = "rolling_back"
                     operation.completed_at = None
                     db.commit()
-                return self._rollback(db, inbound, operation, environment, admin,
-                                      "interrupted_operation")
+                return self._rollback(
+                    db, inbound, operation, environment, admin, "interrupted_operation"
+                )

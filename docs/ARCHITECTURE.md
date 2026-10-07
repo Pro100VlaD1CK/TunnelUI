@@ -12,32 +12,49 @@ API валидирует запросы и авторизует; services коо
 MetricsProvider, XUIProvider; system содержит SystemProvider и FakeSystemProvider.
 Production provider не подменяется fake автоматически при ошибке.
 
-## Privileged agent (проект, Phase 5)
-Unix socket /run/tunnelui-agent/agent.sock, root-owned, group tunnelui, 0660,
-SO_PEERCRED allowlisted backend UID. Versioned JSON protocol, request size/time bounds.
-В запросах registry inbound ID, operation ID, expected hashes, typed config payload;
-нет paths, command, environment или service names из HTTP. Root-owned registry
-связывает ID с unit, canonical binary, working directory, file IDs и backup root.
-Операции status, discover, preview, backup, apply, restart, health, bounded journal,
-export-client. Reload только TLS при доказанной capability. Экспорт без mutating
---generate-client-random-prefix. stdout secret возвращается явно, stderr scrubbed.
-Для apply validate typed data ещё раз; не выполнять команды от web. ExecStart
-считывается структурированно через systemd D-Bus. Поддержать только прямой запуск
-ожидаемого binary; wrapper/env/shell units — manual review, не эвристика.
-Reject symlinks у managed config, unexpected hardlinks, writable parent, paths вне
-allowlist; cert symlinks read-only отдельным путём (Let's Encrypt не ломать).
-NoNewPrivileges для web, root agent минимальные permissions. Не давать web sudo.
+## Linux privileged boundary (реализован в коде, без staging)
+`LinuxRuntime` встраивает `LinuxManagedEnvironment` и `LinuxSystemProvider` в тот же
+`TrustTunnelCoordinator`, что использует sandbox. Web остаётся без root и передаёт
+только managed ID/operation ID через Unix socket `/run/tunnelui/agent.sock`.
+`tunnelui-agent` запускается отдельным root unit через systemd socket activation;
+SO_PEERCRED допускает только UID `backend_user` из root-owned registry. Протокол —
+versioned JSON с typed arguments, request ID, лимитами 6 MiB запроса / 24 MiB ответа,
+таймаутом чтения 5 с и bounded client read. Нет произвольных paths, commands,
+environment или unit names из HTTP. Request ID связывает ответ с запросом, но не
+является replay cache; idempotency внешней mutation принадлежит coordinator.
+
+Root-owned `/etc/tunnelui/agent.toml` связывает ID с unit, binary, working directory,
+четырьмя file IDs, backup root, health target и ожидаемой версией. Registry читается
+через descriptor walk с nofollow, проверкой владельца/режима/размера; лишние поля,
+повторы unit/files и некорректные типы отвергаются. Агент поддерживает `lock.acquire`,
+`lock.release`, `files.snapshot`, `files.backup`, `files.prepare_credentials`,
+`files.commit_credentials`, `files.restore_credentials`, `files.cleanup`,
+`service.status`, `service.restart`, allowlisted `service.reload`, `health.probe`,
+`profile.export`. Discovery/adoption, journal streaming и произвольный config apply
+в агент пока не входят. Reload по умолчанию запрещён; credentials требуют restart.
+
+Файловый adapter проходит директории через `openat`/`O_NOFOLLOW`, проверяет owner,
+mode, regular file и link count, ограничивает файл 4 MiB, пишет same-directory temp,
+fsync и atomic rename; backup хранится в private root-owned каталоге. `flock`
+сериализует inbound между процессами, дополнительно резервируется peer PID;
+исчезнувший peer допускает reclaim. Systemd status/restart/reload используют D-Bus,
+включая bounded JobRemoved wait; shell/sudo не используются. Официальный CLI v1.1.0
+запускается из проверенного binary descriptor, с фиксированными argv, чистым env,
+bounded stdout (64 KiB)/timeout и скрытым stderr. Сертификаты остаются read-only;
+Let's Encrypt symlinks не переписываются. `NoNewPrivileges` применяется к web unit.
 
 ## Adoption
 Текущий sandbox реализует Detect → snapshot bytes/hashes → parse → secret-free preview
 с TTL → explicit confirmation → повторное чтение и hash check → backup → DB metadata
 и encrypted attachments. Collision username и неизвестные credential fields fail closed.
 Ни initial files, ни unit не переписываются. HTTP не принимает filesystem paths.
-Production discovery позднее заменит fixture registry на root-owned allowlist и
-структурированный systemd D-Bus ответ.
+Linux agent пока не предоставляет discovery/adoption; этот HTTP flow остаётся
+sandbox-only. Перед реальным Linux import нужен отдельный workflow с проверкой
+структуры unit `WorkingDirectory`/`ExecStart` и preview, без автоматических writes.
 
 ## Apply и recovery
-Sandbox coordinator использует per-inbound in-process lock и idempotency ID. Durable
+Один coordinator использует per-inbound in-process lock и idempotency ID; Linux
+environment добавляет agent-owned OS lock. Durable
 DB states: pending, preparing, backed_up, writing, applying, checking, succeeded,
 rolling_back, rolled_back, failed, needs_recovery. Checkpoints commit перед каждой
 границей внешнего эффекта. Operation хранит только hashes и safe error codes; secret
@@ -50,9 +67,11 @@ bytes находятся только в зашифрованной БД и priv
 после подтверждённого результата. AuditEvent фиксирует безопасный операторский итог
 отдельно от технического Operation journal.
 
-Production требует OS lock, crash reconciliation при startup, descriptor-based
-filesystem boundary и helper-owned journal/backup. Текущий native filesystem core
-работает только с explicit sandbox directories и FakeSystemProvider.
+При потерянном ответе после rename coordinator считает запись совершённой и
+пытается rollback. Temp после crash удаляется перед restore. Operation journal
+остаётся в SQLite, а backup — у агента; стартовое `recover_all()` и ручной recover
+используют тот же workflow. Протокол не хранит secret payload. Неопределённые
+результаты D-Bus, health или filesystem должны проходить Debian staging acceptance.
 
 ## Expiry и sync (следующие этапы)
 UTC clock; durable scheduler периодически находит due attachments, группирует по

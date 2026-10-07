@@ -18,7 +18,7 @@ TRANSITIONS = {
     "pending": {"preparing", "failed"},
     "preparing": {"backed_up", "applying", "failed"},
     "backed_up": {"writing", "failed", "needs_recovery"},
-    "writing": {"applying", "failed", "needs_recovery"},
+    "writing": {"applying", "rolling_back", "failed", "needs_recovery"},
     "applying": {"checking", "rolling_back", "failed", "needs_recovery"},
     "checking": {"succeeded", "rolling_back", "needs_recovery"},
     "rolling_back": {"rolled_back", "needs_recovery"},
