@@ -7,6 +7,7 @@ from pathlib import Path
 from tunnelui.agent.registry import FILE_IDS, ManagedInstance
 
 MAX_MANAGED_FILE_BYTES = 4 * 1024 * 1024
+MAX_BINARY_BYTES = 64 * 1024 * 1024
 
 
 class FileSecurityError(Exception):
@@ -157,7 +158,12 @@ class SecureManagedFiles:
                 dir_fd=parent_fd,
             )
             try:
-                info = self._validate_regular_fd(descriptor, instance.owner_uid)
+                info = self._validate_regular_fd(
+                    descriptor,
+                    instance.owner_uid,
+                    max_bytes=MAX_BINARY_BYTES,
+                    size_error="binary_too_large",
+                )
                 if not info.st_mode & stat.S_IXUSR:
                     raise FileSecurityError("binary_not_executable")
                 yield descriptor, parent_fd, info
@@ -236,14 +242,20 @@ class SecureManagedFiles:
         return descriptor
 
     @staticmethod
-    def _validate_regular_fd(descriptor: int, owner_uid: int, credentials: bool = False):
+    def _validate_regular_fd(
+        descriptor: int,
+        owner_uid: int,
+        credentials: bool = False,
+        max_bytes: int = MAX_MANAGED_FILE_BYTES,
+        size_error: str = "managed_file_too_large",
+    ):
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != owner_uid:
             raise FileSecurityError("unsafe_managed_file")
         if info.st_mode & 0o022 or (credentials and info.st_mode & 0o077):
             raise FileSecurityError("unsafe_file_mode")
-        if info.st_size > MAX_MANAGED_FILE_BYTES:
-            raise FileSecurityError("managed_file_too_large")
+        if info.st_size > max_bytes:
+            raise FileSecurityError(size_error)
         return info
 
 

@@ -9,7 +9,12 @@ from pathlib import Path
 import pytest
 
 from tunnelui.agent.exporter import ExportError, TrustTunnelCliExporter
-from tunnelui.agent.files import FileSecurityError, SecureManagedFiles
+from tunnelui.agent.files import (
+    MAX_BINARY_BYTES,
+    MAX_MANAGED_FILE_BYTES,
+    FileSecurityError,
+    SecureManagedFiles,
+)
 from tunnelui.agent.locking import LockError, ProcessLocks
 from tunnelui.agent.registry import ManagedInstance
 
@@ -37,6 +42,25 @@ def make_instance(tmp_path: Path) -> ManagedInstance:
         tls_server_name="vpn.example.invalid", quic_configured=True,
         allow_reload=False, owner_uid=os.getuid(),
     )
+
+
+def test_binary_uses_separate_size_limit(tmp_path):
+    instance = make_instance(tmp_path)
+
+    with instance.binary.open("wb") as handle:
+        handle.truncate(MAX_MANAGED_FILE_BYTES + 1)
+    instance.binary.chmod(0o700)
+
+    with SecureManagedFiles().open_binary(instance):
+        pass
+
+    with instance.binary.open("wb") as handle:
+        handle.truncate(MAX_BINARY_BYTES + 1)
+    instance.binary.chmod(0o700)
+
+    with pytest.raises(FileSecurityError, match="binary_too_large"):
+        with SecureManagedFiles().open_binary(instance):
+            pass
 
 
 def test_secure_atomic_backup_restore_and_fsync(tmp_path, monkeypatch):
