@@ -45,6 +45,14 @@ def sandbox(request: Request):
     return runtime
 
 
+def adoption(request: Request):
+    runtime = management(request)
+    service = getattr(runtime, "adoption", None)
+    if service is None:
+        raise DomainError("management_unavailable", 503)
+    return service
+
+
 def set_cookie(response: Response, request: Request, token: str, age: int):
     response.set_cookie(COOKIE, token, max_age=age, httponly=True,
                         secure=request.app.state.settings.secure_cookie,
@@ -187,9 +195,15 @@ def inbounds(request: Request, _=Depends(admin), db=Depends(db_session)):
             "service_status": service_status,
             "operation": operation_output(current) if current else None,
         })
-    return {"items": items, "adoption_available": bool(request.app.state.sandbox) and not any(
-        row.registry_id == runtime.environment.registry_id for row in rows
-    ) if runtime else False}
+    adoption_available = bool(
+        runtime
+        and getattr(runtime, "adoption", None)
+        and not any(
+            row.registry_id == runtime.environment.registry_id
+            for row in rows
+        )
+    )
+    return {"items": items, "adoption_available": adoption_available}
 
 
 @router.get("/inbounds/{inbound_id}")
@@ -234,19 +248,20 @@ def inbound_detail(inbound_id: str, request: Request, _=Depends(admin), db=Depen
 
 @router.get("/trusttunnel/discovery")
 def trusttunnel_discovery(request: Request, _=Depends(admin)):
-    return sandbox(request).adoption.discover()
+    return adoption(request).discover()
 
 
 @router.post("/trusttunnel/adoption/preview")
 def trusttunnel_preview(request: Request, _=Depends(admin)):
-    return sandbox(request).adoption.detect()
+    return adoption(request).detect()
 
 
 @router.post("/trusttunnel/adoption/confirm", status_code=201)
 def trusttunnel_confirm(data: AdoptionConfirm, request: Request,
                         identity=Depends(admin), db=Depends(db_session)):
-    runtime = sandbox(request)
-    return runtime.adoption.confirm(
+    service = adoption(request)
+    runtime = management(request)
+    return service.confirm(
         data.preview_id, db, runtime.coordinator.box, identity.username
     )
 

@@ -4,6 +4,7 @@ from tunnelui.agent.client import LinuxAgentClient, UnixSocketTransport
 from tunnelui.integrations.exporter import AgentTrustTunnelExporter
 from tunnelui.security import SecretBox
 from tunnelui.services.coordinator import TrustTunnelCoordinator
+from tunnelui.services.linux_adoption import LinuxAdoptionService
 from tunnelui.services.operations import InboundLocks
 from tunnelui.system.linux import LinuxManagedEnvironment
 
@@ -33,4 +34,5 @@ class LinuxRuntime:
             self.locks,
         )
         self.exporter = AgentTrustTunnelExporter(client, managed_id)
+        self.adoption = LinuxAdoptionService(client, self.environment, self.locks)
 
