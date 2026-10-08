@@ -74,8 +74,8 @@ Native engine binary gitignored; launcher при отсутствии может
 `packaging/systemd/` содержит примерные web, agent и socket units;
 `packaging/tmpfiles.d/tunnelui.conf` — runtime/private каталоги;
 `packaging/agent.toml.example` — root-owned managed registry;
-`packaging/tunnelui.env.example` — web environment. Ничего из этого не
-устанавливалось на VPS. Web unit работает как `tunnelui`, слушает только loopback
+`packaging/tunnelui.env.example` — web environment. Это примеры в репозитории,
+а не подтверждённая копия текущих VPS units. Web unit работает как `tunnelui`, слушает только loopback
 8080; agent socket принадлежит root:tunnelui (0660), agent — отдельный root
 process. Публичный HTTPS ingress не входит в этот набор. TCP/UDP 443, TCP 80/22 и
 UDP 51820 не занимаются панелью.
@@ -95,9 +95,14 @@ Sandbox включается отдельно только development configura
 `tunnelui-agent` на Windows отвергается. Не использовать несколько web workers:
 login limiter остаётся process-local.
 
-Перед какой-либо установкой нужен отдельный Debian 12 staging acceptance на
-тестовом endpoint: запустить Linux-only tests/CI, сверить `trusttunnel_endpoint
---version` и `--help`, unit ExecStart/WorkingDirectory, владельцев и mode файлов,
-socket SO_PEERCRED, D-Bus restart job, CLI export, TCP/TLS/QUIC health, drift,
-rollback и `needs_recovery` после сбоев. Linux discovery/adoption и production
-bootstrap/reconciliation ещё не готовы; sample units не делают проект production-ready.
+По сообщению владельца проекта, Debian 12 staging TrustTunnel v1.1.0 на TCP/UDP
+8448 и TunnelUI HTTPS на TCP 9443 уже вручную подтвердили discovery, adoption,
+apply, D-Bus restart/health, rollback, официальный TOML/deeplink, QR и подключение
+iPhone. Production TrustTunnel остаётся на TCP/UDP 443. Эти данные не получены
+текущим запуском Codex и не являются разрешением на deployment.
+
+После текущих изменений нужен повторный staging acceptance на том же отдельном
+экземпляре: Linux CI, registry/unit compatibility, внешний drift, metadata re-import,
+отказ агента, rollback и `needs_recovery`. Не выполнять проверки на production 443.
+Особенно сверить фактические unit ExecStart/WorkingDirectory, owner/mode, socket
+SO_PEERCRED, официальный CLI и health. Sample units не делают ветку production-ready.

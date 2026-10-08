@@ -1,14 +1,14 @@
 # TunnelUI
 
-Главный технический документ. Состояние на 2026-10-07. Product context — `PRODUCT.md`,
-визуальная система — `DESIGN.md`. Production, VPS и работающие сервисы в этом проходе
-не подключались и не изменялись.
+Главный технический документ. Состояние на 2026-10-08. Product context — `PRODUCT.md`,
+визуальная система — `DESIGN.md`. В этом проходе Codex работает только с локальными
+исходниками; приведённые ниже Debian staging результаты сообщил владелец проекта.
 
 ## Цель проекта
-Поддерживаемая русскоязычная web-панель управления VPN-доступом: TrustTunnel под
-непосредственным управлением TunnelUI, Hysteria2 и другие поддерживаемые протоколы
-через 3x-ui, Mihomo через subscription 3x-ui. Первая страница — «Входящие»;
-dashboard и traffic quota не входят в текущий scope.
+Независимая русскоязычная web-панель управления исключительно TrustTunnel:
+несколько экземпляров, клиенты, профили, конфигурации, состояние и безопасный apply.
+3x-ui остаётся только UX-референсом; Xray/Hysteria2/Mihomo/Clash вне scope.
+Первая страница — «Входящие»; dashboard и необоснованная traffic quota не нужны.
 
 ## Текущая архитектура
 Модульный монолит FastAPI / Pydantic 2 / SQLAlchemy 2 / Alembic / SQLite и
@@ -21,8 +21,9 @@ Phase 2 sandbox composition сохраняет `FakeSystemProvider`, sandbox-ф�
 exporter. Новый Linux boundary встраивает `LinuxManagedEnvironment` за тем же
 coordinator и вызывает отдельный root-owned `tunnelui-agent` по Unix socket только
 при полной explicit agent configuration. Без неё production-default management
-fail closed с 503; скрытого fake fallback нет. Linux code пока не проходил Debian
-staging. Подробности — `docs/ARCHITECTURE.md`.
+fail closed с 503; скрытого fake fallback нет. Linux adoption уже есть в коде;
+прошлая версия вручную проверялась на отдельном Debian staging, а изменения этого
+прохода требуют повторной проверки. Подробности — `docs/ARCHITECTURE.md`.
 
 ## Компоненты
 - `backend/src/tunnelui`: API, domain, services, repositories, integrations, system adapters.
@@ -33,7 +34,8 @@ staging. Подробности — `docs/ARCHITECTURE.md`.
 - `.agents/skills/impeccable`: project-local design/UX skill; Ant Design остаётся библиотекой компонентов.
 - `backend/src/tunnelui/agent`: versioned IPC, registry, OS lock, безопасные файлы,
   systemd D-Bus, health, официальный CLI exporter и socket server.
-- `packaging`: примерные systemd/socket units, tmpfiles, registry и env; не установлены.
+- `packaging`: примерные systemd/socket units, tmpfiles, registry и env; фактическую
+  конфигурацию staging нужно сверять отдельно, примеры не считать её копией.
 
 ## Модель данных
 `Admin`, `AdminSession`, `Client`, `Inbound`, `Attachment`, `Operation`, `AuditEvent`.
@@ -50,31 +52,32 @@ API token или private key. AuditEvent — отдельная сущность
 
 ## TrustTunnel integration
 Проверен официальный tag v1.1.0, commit `fab5b8353a19332f935fa30869307d37d4a898d1`.
-Sandbox workflow: Detect → Parse → Preview → Confirm adoption → backup → сохранить
+Sandbox и Linux workflow: Detect → Parse → Preview → Confirm adoption → backup → сохранить
 metadata/hashes и зашифрованные attachments. Adoption не переписывает исходные config
 или service unit. Relative paths разрешаются от WorkingDirectory. Username collision,
 unknown credential fields и unknown version fail closed.
 
 Linux agent читает только root-owned allowlisted registry, не принимает arbitrary
-path/command, делает snapshots/backup/atomic credentials replace/restore, D-Bus
-restart/status, structured health и официальный CLI export. Linux discovery/adoption
-ещё отсутствует, поэтому существующий service на VPS не импортировался.
+path/command, делает managed.describe/snapshot/backup/atomic credentials
+replace/restore, D-Bus restart/status, structured health и официальный CLI export.
+Linux adoption не переписывает файлы и не перезапускает службу. Повторное confirm
+того же preview идемпотентно в живом процессе; после restart при потерянном ответе
+нужно сверить список inbounds. Явный re-import синхронизирует credentials и metadata
+без потери клиентов только при точном совпадении usernames и без pending/recovery.
 
 Credentials считаются требующими restart. SIGHUP подтверждён только для TLS hosts.
 Официальный CLI contract: `binary vpn.toml hosts.toml -c USER -a ADDRESS --format
-deeplink|toml`; `--help` установленного на сервере binary ещё не проверялся. Metrics
+deeplink|toml`; по сообщению владельца официальный export проверен на staging. Metrics
 и `/clients` относятся к Phase 3; listener по умолчанию только loopback.
 
 ## 3x-ui integration
-Проверен tag v3.8.5, commit `7ef22f94c950ff09f0870e2295fa65ad5968742c`.
-Реализован изолированный read-only adapter list/get с TLS verification, timeout,
-response limit, запретом redirects и MockTransport tests. В runtime/web он не подключён.
-Никакого доступа к `x-ui.db`. Write sync и reconciliation — Phase 4.
+**Superseded:** прежний план внешней интеграции и read-only adapter отменены новым
+TrustTunnel-only scope. Adapter не был подключён к runtime и удалён без миграции БД.
+3x-ui используется исключительно как UX-референс.
 
 ## Clash/Mihomo integration
-Будет использовать subscription-механизм 3x-ui только для принадлежащих ему
-протоколов. TrustTunnel не преобразуется в Clash node. Порты и пути не hardcode.
-Subscription storage, выдача URL и UI ещё не реализованы.
+**Superseded:** прежний план subscription-интеграции отменён. Код поддержки этих
+систем не разрабатывается; TrustTunnel не преобразуется в Clash node.
 
 ## Security model
 Один admin; bootstrap только локальной CLI. Argon2id, server-side hashed sessions,
@@ -90,22 +93,31 @@ production default fail closed. Полная модель — `docs/SECURITY.md`
 пишет same-directory temp с fsync и atomic replace, вызывает provider restart/health,
 фиксирует checkpoints в Operation и обновляет applied state/hashes после успеха.
 
-При health/restart failure coordinator восстанавливает operation-owned backup,
-повторяет restart/health и записывает `rolled_back`; при неуспешном восстановлении
-ставит `needs_recovery`, блокирует новые apply и предоставляет явный recover action.
+При health/restart failure coordinator сначала сверяет текущие hashes с ожидаемым
+или только что записанным состоянием, затем восстанавливает operation-owned backup,
+повторяет restart/health и записывает `rolled_back`; при неизвестных внешних правках
+или неуспешном восстановлении ставит `needs_recovery`, блокирует новые apply и
+предоставляет явный recover action.
 Drift блокирует overwrite и допускает re-import только при точном сопоставлении
-username либо отмену pending state. Concurrent apply возвращает видимую ошибку.
+username и отсутствии pending/recovery либо отмену pending state. Check-drift не
+снимает `recovery_required`; apply повторно проверяет hashes после temp-write,
+а Linux agent сравнивает ожидаемые hashes всех файлов ещё раз непосредственно перед
+replace. При его явном `drift_conflict` backup не восстанавливается поверх внешней
+правки. Restart отказывает при drift. Bind address берётся из vpn.toml, public address —
+отдельно из root registry; они не подменяют друг друга. Concurrent apply даёт conflict.
 
-Это проверенный sandbox workflow и реализованный Linux adapter, но Linux side effects
-пока проверены только кодом/тестами, не на Debian staging. При потерянном ответе после
+Это проверенный sandbox workflow и реализованный Linux adapter. Предыдущий код Linux
+adoption/apply по сообщению владельца прошёл ручную Debian staging проверку;
+текущие изменения ещё нет. При потерянном ответе после
 rename coordinator исходит из возможного replace и делает rollback; при crash после
 prepare restore удаляет operation-owned temp. Production требует staging acceptance.
 
 ## Текущая инфраструктура
-Только данные пользователя, без live detection: Debian 12, `fi-zanevka-pnv`,
-`150.241.228.208`, `zanevka-pnv.duckdns.org`; TrustTunnel v1.1.0 в
-`/opt/trusttunnel`, `trusttunnel.service`, TCP/UDP 443; WireGuard UDP 51820,
-SSH TCP 22, Certbot TCP 80; 3x-ui v3.8.5. Эти сервисы не трогались.
+По сообщению владельца, без текущего live detection: Debian 12 / Linux 6.1;
+TrustTunnel v1.1.0 production TCP/UDP 443, отдельный staging TCP/UDP 8448,
+TunnelUI HTTPS TCP 9443. Web работает как `tunnelui`, агент — root через Unix socket
+и D-Bus. В staging `ipv6_available = false`; внешнего IPv6 нет. 3x-ui и WireGuard
+существуют на сервере, но вне scope проекта и в этом проходе не затрагиваются.
 
 ## Реализовано
 - Phase 0 и Phase 1: документы, repository structure, migrations, auth/security,
@@ -125,30 +137,33 @@ SSH TCP 22, Certbot TCP 80; 3x-ui v3.8.5. Эти сервисы не трога�
 - Phase 3 Linux boundary code: explicit Linux composition за существующим coordinator,
   root agent с SO_PEERCRED, typed/bounded Unix IPC, root registry, descriptor/no-follow
   files и backup, OS lock, systemd D-Bus, bounded CLI export и structured health.
-  Примерные units/tmpfiles/registry и Linux CI job добавлены, но не развернуты.
+  Примерные units/tmpfiles/registry и Linux CI job добавлены; фактические staging
+  units не следует считать точной копией файлов `packaging/` без сверки.
+- Linux adoption: managed.describe, discovery, preview, confirm, encrypted import,
+  backup без restart/config write; по сообщению владельца, staging проверил создание
+  клиента, apply/rollback, официальный TOML/deeplink/QR и iPhone VPN. Текущие
+  regression-тесты проверяют повтор confirm, agent failure, drift, metadata refresh.
 
 ## Сейчас в работе
-Текущий проход — Phase 3 Linux boundary hardening без VPS/production. Phase 2 sandbox
-не переписан. Windows local tests и Linux CI configuration проверяются; фактический
-Linux CI run и Debian staging acceptance ещё не выполнялись. Локальный прогон
-2026-10-07: Ruff pass; pytest **99 passed, 10 Linux-only skipped**; TypeScript pass;
-Vitest **3 passed**; Vite build pass; Playwright Chromium **6 passed**;
-Impeccable detector Profiles **0 findings**. Windows sandbox `esbuild spawn EPERM`
-потребовал повторить Vitest/Vite/Playwright в разрешённом project-local контексте.
+Текущий проход завершает Linux adoption, drift/metadata safety и TrustTunnel-only
+scope локально, без VPS/SSH/deployment. Phase 2 coordinator и Operation journal
+сохранены. Текущий локальный Windows прогон: Ruff pass, pytest **113 passed,
+12 Linux-only skipped**, 1 upstream warning; TypeScript pass, Vitest 3 passed,
+Vite build pass, Playwright 6 passed. Linux CI и повторный staging acceptance
+текущего diff ещё не выполнялись.
 
 ## Следующие задачи
 1. Завершить оставшийся Phase 2 product scope: durable expiry scheduler/jobs и
    безопасное применение username/expiry для уже привязанных клиентов.
-2. Запустить Linux CI и Debian 12 staging acceptance на отдельном test endpoint;
-   проверить socket/permissions, D-Bus, CLI, health, rollback/recovery и unit sandboxing.
-3. Завершить Linux discovery/adoption и production bootstrap; затем Phase 3 metrics
-   `/clients`, Rules и Profiles runtime. CLI exporter написан, но не проверен на VPS.
-4. Phase 4: 3x-ui auth/API, external inbound sync и Mihomo subscription.
-5. Phase 5: installation/upgrade/rollback packaging, staging acceptance и deployment.
+2. Запустить Linux CI и повторить Debian 12 staging acceptance для текущих изменений:
+   drift, metadata re-import, agent failure, rollback/recovery, unit compatibility.
+3. Завершить оставшийся TrustTunnel scope: metrics `/clients`, Rules, certificate
+   read-only detection и поддержка нескольких managed instances в одной панели.
+4. Installation/upgrade/rollback packaging и отдельный production gate.
 
 ## Известные ограничения
-- Host-management в подключённом sandbox остаётся fake. Linux adapter существует,
-  но не исполнялся на Debian и не подключался к VPS; 3x-ui остаётся read-only adapter.
+- Sandbox host-management остаётся fake; Linux adapter и adoption, по сообщению
+  владельца, проверены на отдельном Debian staging до текущих изменений.
 - Sandbox locks in-process; Linux agent использует flock per managed ID. Global client
   access по нескольким inbound выполняется
   последовательно, без общей атомарной транзакции и cross-inbound recovery.
@@ -157,10 +172,10 @@ Impeccable detector Profiles **0 findings**. Windows sandbox `esbuild spawn EPER
 - Пустой `credentials.toml` не поддерживается TrustTunnel v1.1.0, поэтому последний
   active client нельзя отключить или отвязать без отдельного проверенного решения.
 - Fake exporter намеренно не создаёт реальный `tt://`; Linux exporter использует
-  официальный CLI, но runtime binary на VPS ещё не проверен.
-- Re-import поддерживает только неизменившийся набор username; explicit mapping UI нет.
-- Нет metrics/runtime traffic, rules editor, certificate management, backup retention,
-  3x-ui writes и Mihomo subscriptions.
+  официальный CLI, результат подтверждён ручной staging-проверкой владельца.
+- Re-import поддерживает только неизменившийся набор username и отказывает при
+  pending/recovery; explicit mapping UI нет. Изменения файлов не применяются молча.
+- Нет metrics/runtime traffic, rules editor, certificate management и backup retention.
 - Vite сообщает о крупном eager Ant Design chunk (~1.23 MB raw); route splitting отложен.
 - Backend TestClient сообщает upstream deprecation warning Starlette/httpx.
 - Impeccable skill 4.3.1 имеет доступное обновление 4.5.0; оно не устанавливалось.
@@ -168,11 +183,17 @@ Impeccable detector Profiles **0 findings**. Windows sandbox `esbuild spawn EPER
   выполняет его через активный PowerShell. `.codex/impeccable-hook.cmd` задаёт явную
   cmd.exe-границу, передаёт stdin и сохраняет exit code. После update повторно проверить
   manifest и одобрение через `/hooks`.
-- Linux agent пока не умеет discovery/adoption, certificate detection, journal API,
+- Linux agent умеет managed.describe для adoption, но пока не умеет certificate
+  detection, journal API,
   backup retention; QUIC health обозначен `unverified`, а не healthy. IPC request ID
   не дедуплицирует повторное действие; durable idempotency принадлежит coordinator.
-- Linux-only tests пропускаются на Windows; GitHub Actions job настроен, но фактический
-  Linux run ещё не подтверждён. Docker Linux engine и WSL здесь недоступны.
+- Linux-only tests пропускаются на Windows; GitHub Actions Linux job настроен, но
+  этот проход не запускал удалённый CI. По сообщению владельца, backend на VPS до
+  текущих изменений имел результат 114 passed, 1 warning.
+- Проверка hash у агента уменьшает окно гонки с внешним редактором, но не является
+  межпроцессной блокировкой для ручного редактора вне TunnelUI: между сравнением
+  файлов и atomic rename остаётся короткий TOCTOU интервал. Текущие изменения
+  требуют Linux CI и отдельного staging испытания этого сценария.
 
 ## Принятые архитектурные решения
 - ADR-001 active: host integration через минимальный privileged helper; web без root.
@@ -191,14 +212,30 @@ Impeccable detector Profiles **0 findings**. Windows sandbox `esbuild spawn EPER
   coordinator; root-owned registry + UID-checked Unix IPC + per-inbound flock.
 - ADR-012 active: health подтверждает service/TCP/TLS, QUIC остаётся `unverified`
   без credential-bearing functional probe; успех health не означает доказанный HTTP/3.
+- ADR-013 active (2026-10-08): продукт исключительно для TrustTunnel; прежние планы
+  3x-ui/Hysteria2/Mihomo/Clash **superseded**. Ветка `phase4/linux-adoption` сохраняет
+  своё Git-имя; прежний «Phase 4 = 3x-ui» отменён, номера завершённых этапов не
+  переименованы задним числом.
+- ADR-014 active (2026-10-08): external drift не снимает recovery gate; re-import
+  явно синхронизирует credentials и metadata из проверенного snapshot только без
+  pending changes и при совпадении usernames. Public и bind addresses раздельны.
+- ADR-015 active (2026-10-08): `files.commit_credentials` принимает typed ожидаемые
+  hashes всех allowlisted файлов; agent повторяет сравнение до rename и возвращает
+  `drift_conflict` без записи. Rollback проверяет hashes перед restore; неизвестное
+  внешнее состояние требует recovery без перезаписи. После health apply/rollback
+  повторно проверяют фактические hashes до объявления успеха. Неизвестный результат ответа
+  после rename по-прежнему обрабатывается через существующий rollback/recovery journal.
 Изменённые решения помечаются superseded и дополняются заменой, история не стирается.
 
 ## Deployment notes
-Deployment не выполнялся. Dev работает на loopback и explicit sandbox configuration.
+В текущем проходе deployment не выполнялся. Dev работает на loopback и explicit
+sandbox configuration. По сообщению владельца, предыдущая версия уже установлена
+на отдельном Debian staging и доступна по HTTPS TCP 9443.
 Примерный web unit — `User=tunnelui`; socket root:tunnelui 0660, agent root с
 ограниченным registry/paths и typed operation IDs. Панель не занимает 443.
 DB backup и master-key backup хранятся раздельно. `docs/DEPLOYMENT.md` содержит
-примерные units и staging gate, а не инструкцию немедленного production install.
+примерные units и повторный staging gate для текущего diff, а не разрешение на
+production install.
 
 ## Changelog
 - 2026-10-01: Phase 0, version-pinned research, архитектура, документы и project-local Impeccable.
@@ -212,3 +249,7 @@ DB backup и master-key backup хранятся раздельно. `docs/DEPLOY
 - 2026-10-07: Phase 3 Linux boundary реализован за существующими interfaces:
   root-owned agent/registry/socket, safe file operations, D-Bus, locks, CLI exporter,
   health, Linux CI configuration и unit examples. Production/VPS не затронуты.
+- 2026-10-08: по сообщению владельца, предыдущий Linux adoption прошёл ручную Debian
+  staging проверку; текущий локальный проход усилил drift/re-import/metadata и
+  поправил Linux UI. Продуктовый scope сужен до TrustTunnel, старые интеграционные
+  планы помечены superseded; production/VPS этим проходом не затронуты.
