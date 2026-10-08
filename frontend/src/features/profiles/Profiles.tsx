@@ -23,7 +23,7 @@ export function Profiles() {
     if (data.format === 'toml') {
       const url = URL.createObjectURL(new Blob([data.content], { type: data.media_type }));
       const anchor = document.createElement('a'); anchor.href = url; anchor.download = `${chosen?.username ?? 'client'}.toml`; anchor.click(); URL.revokeObjectURL(url);
-      message.success('TOML подготовлен тестовым экспортёром');
+      message.success(data.sandbox ? 'TOML подготовлен тестовым экспортёром' : 'TOML подготовлен официальным TrustTunnel CLI');
     } else setProfile(data);
   } });
   const copy = async (attachment: Attachment) => {
@@ -31,7 +31,7 @@ export function Profiles() {
     try {
       data = await exporter.mutateAsync({ format: 'deeplink', attachment });
       await navigator.clipboard.writeText(data.content);
-      setProfile(undefined); message.success('Тестовая ссылка скопирована');
+      setProfile(undefined); message.success(data.sandbox ? 'Тестовая ссылка скопирована' : 'Ссылка скопирована');
     } catch {
       if (data) {
         setProfile(data);
@@ -50,8 +50,8 @@ export function Profiles() {
       { title: 'Статус', render: () => <Tag color="success">Активен</Tag> },
       { title: 'Действия', width: 390, render: (_, attachment) => <Space wrap><Button icon={<QrcodeOutlined />} loading={exporter.isPending} onClick={() => exporter.mutate({ format: 'deeplink', attachment })}>QR</Button><Button icon={<CopyOutlined />} loading={exporter.isPending} onClick={() => copy(attachment)}>Копировать ссылку</Button><Button icon={<DownloadOutlined />} loading={exporter.isPending} onClick={() => exporter.mutate({ format: 'toml', attachment })}>Скачать TOML</Button></Space> },
     ]} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="У клиента нет активного применённого профиля TrustTunnel" /> }} />}
-    <Modal open={Boolean(profile)} title="TrustTunnel · тестовый профиль" footer={<Button onClick={() => setProfile(undefined)}>Закрыть</Button>} onCancel={() => setProfile(undefined)} destroyOnHidden>
-      {profile && <div className="qr-panel"><Alert type="info" showIcon title="Тестовый экспортёр" description="Это маркер локальной среды, а не реальный tt://. Production-адаптер будет вызывать официальный TrustTunnel CLI." /><QRCode value={profile.content} size={240} /><Typography.Text type="secondary">QR содержит секретный результат и очищается при закрытии окна.</Typography.Text></div>}
+    <Modal open={Boolean(profile)} title={profile?.sandbox ? 'TrustTunnel · тестовый профиль' : 'TrustTunnel · профиль подключения'} footer={<Button onClick={() => setProfile(undefined)}>Закрыть</Button>} onCancel={() => setProfile(undefined)} destroyOnHidden>
+      {profile && <div className="qr-panel">{profile.sandbox && <Alert type="info" showIcon title="Тестовый экспортёр" description="Это маркер локальной среды, а не реальный tt://. Linux-адаптер вызывает официальный TrustTunnel CLI." />}<QRCode value={profile.content} size={240} /><Typography.Text type="secondary">QR содержит секретный результат и очищается при закрытии окна.</Typography.Text></div>}
     </Modal>
   </>;
 }

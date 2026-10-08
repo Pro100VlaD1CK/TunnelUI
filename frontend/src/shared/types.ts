@@ -49,5 +49,6 @@ export interface Inbound {
   client_count: number;
   config_state: 'synced' | 'drift' | 'pending' | 'error' | 'recovery_required' | 'unmanaged';
   service_status: 'running' | 'stopped' | 'unknown';
+  execution_mode: 'sandbox' | 'linux' | 'unavailable';
   operation: Operation | null;
 }
