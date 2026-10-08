@@ -8,9 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from tunnelui.agent.client import AgentClientError, LinuxAgentClient
+from tunnelui.agent.client import LinuxAgentClient
 from tunnelui.domain.errors import DomainError
-from tunnelui.integrations.trusttunnel import capabilities, parse_credentials, preview
+from tunnelui.integrations.trusttunnel import capabilities, parse_credentials
 from tunnelui.models import Attachment, Client, Inbound
 from tunnelui.security import SecretBox
 from tunnelui.services.audit import record
@@ -33,73 +33,22 @@ class LinuxAdoptionService:
         self.registry_id = environment.registry_id
         self._inbound_locks = locks
         self._pending = None
+        self._confirmed: tuple[str, dict] | None = None
         self._lock = threading.Lock()
 
-    def _metadata(self) -> dict[str, object]:
-        try:
-            data = self.client.describe(self.registry_id)
-        except AgentClientError:
-            raise DomainError("management_unavailable", 503) from None
-
-        required = (
-            "service",
-            "working_directory",
-            "binary_path",
-            "vpn_config_path",
-            "hosts_config_path",
-            "credentials_path",
-            "rules_path",
-            "public_address",
-            "expected_version",
-        )
-        if any(not isinstance(data.get(key), str) for key in required):
-            raise DomainError("managed_metadata_invalid", 503)
-
-        if (
-            data["expected_version"] != self.environment.version
-            or data["public_address"] != self.environment.public_address
-        ):
-            raise DomainError("managed_metadata_mismatch", 503)
-
-        return data
-
     def _evidence(self):
-        metadata = self._metadata()
-
         try:
             snapshot = self.environment.snapshot()
         except OSError:
             raise DomainError("management_unavailable", 503) from None
-
-        data = preview(
-            metadata["working_directory"],
-            [
-                metadata["binary_path"],
-                metadata["vpn_config_path"],
-                metadata["hosts_config_path"],
-            ],
-            snapshot,
-            metadata["expected_version"],
-        )
-
-        if (
-            data["binary_path"] != metadata["binary_path"]
-            or data["vpn_config_path"] != metadata["vpn_config_path"]
-            or data["hosts_config_path"] != metadata["hosts_config_path"]
-            or data["credentials_path"] != metadata["credentials_path"]
-            or (
-                data["rules_path"] is not None
-                and data["rules_path"] != metadata["rules_path"]
-            )
-        ):
-            raise DomainError("managed_metadata_mismatch", 503)
+        data, public_address, service_name = self.environment.adoption_metadata(snapshot)
 
         evidence = {
             "preview": data,
-            "service_name": metadata["service"],
-            "public_address": metadata["public_address"],
+            "service_name": service_name,
+            "public_address": public_address,
         }
-        return metadata, snapshot, data, evidence
+        return snapshot, data, evidence
 
     def _service_status(self) -> str:
         try:
@@ -109,11 +58,11 @@ class LinuxAdoptionService:
         return "running" if status.get("running") is True else "stopped"
 
     def discover(self):
-        metadata, _snapshot, data, _evidence = self._evidence()
+        _snapshot, data, evidence = self._evidence()
         return {
             "found": True,
             "registry_id": self.registry_id,
-            "service_name": metadata["service"],
+            "service_name": evidence["service_name"],
             "version": data["version"],
             "working_directory": data["working_directory"],
             "listen_address": data["listen_address"],
@@ -122,7 +71,7 @@ class LinuxAdoptionService:
 
     def detect(self):
         with self._lock:
-            metadata, _snapshot, data, evidence = self._evidence()
+            _snapshot, data, evidence = self._evidence()
             token = secrets.token_urlsafe(24)
             self._pending = (token, time.monotonic() + 300, evidence)
 
@@ -132,8 +81,8 @@ class LinuxAdoptionService:
                 **data,
                 "preview_id": token,
                 "registry_id": self.registry_id,
-                "service_name": metadata["service"],
-                "public_address": metadata["public_address"],
+                "service_name": evidence["service_name"],
+                "public_address": evidence["public_address"],
                 "service_status": self._service_status(),
                 "capabilities": {
                     "client_metrics": cap.client_metrics,
@@ -154,6 +103,8 @@ class LinuxAdoptionService:
         admin: str,
     ):
         with self._lock, self._inbound_locks.acquire(self.registry_id):
+            if self._confirmed and self._confirmed[0] == preview_id:
+                return self._confirmed[1].copy()
             pending = self._pending
             if (
                 not pending
@@ -166,7 +117,7 @@ class LinuxAdoptionService:
 
             try:
                 with self.environment.operation(operation_id):
-                    _metadata, snapshot, fresh, evidence = self._evidence()
+                    snapshot, fresh, evidence = self._evidence()
 
                     if evidence != pending[2]:
                         raise DomainError("drift_conflict")
@@ -245,6 +196,13 @@ class LinuxAdoptionService:
                             inbound.id,
                         )
                         db.commit()
+                        result = {
+                            "inbound_id": inbound.id,
+                            "backup_id": operation_id,
+                            "client_count": len(credentials),
+                        }
+                        self._confirmed = (preview_id, result)
+                        self._pending = None
                     except IntegrityError:
                         db.rollback()
                         raise DomainError("adoption_conflict") from None
@@ -252,10 +210,4 @@ class LinuxAdoptionService:
             except OSError:
                 raise DomainError("management_unavailable", 503) from None
 
-            self._pending = None
-
-            return {
-                "inbound_id": inbound.id,
-                "backup_id": operation_id,
-                "client_count": len(credentials),
-            }
+            return result.copy()

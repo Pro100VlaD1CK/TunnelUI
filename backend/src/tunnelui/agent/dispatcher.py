@@ -8,6 +8,7 @@ from tunnelui.agent.health import HealthProbe
 from tunnelui.agent.locking import LockError, ProcessLocks
 from tunnelui.agent.protocol import (
     AgentRequest,
+    CommitArguments,
     EmptyArguments,
     ExportArguments,
     OperationArguments,
@@ -119,7 +120,10 @@ class AgentDispatcher:
                 prepare = _args(arguments, PrepareArguments)
                 self.files.prepare_credentials(instance, operation_id, prepare.content())
             elif operation == "files.commit_credentials":
-                self.files.commit_credentials(instance, operation_id)
+                commit = _args(arguments, CommitArguments)
+                self.files.commit_credentials(
+                    instance, operation_id, commit.expected_hashes
+                )
             elif operation == "files.restore_credentials":
                 self.files.restore_credentials(instance, operation_id)
             elif operation == "files.cleanup":

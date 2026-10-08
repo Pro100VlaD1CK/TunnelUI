@@ -181,8 +181,8 @@ def test_uncertain_replace_reply_uses_existing_rollback_contract(
         def __getattr__(self, name):
             return getattr(self.base, name)
 
-        def commit_credentials(self, operation_id):
-            self.base.commit_credentials(operation_id)
+        def commit_credentials(self, operation_id, expected_hashes):
+            self.base.commit_credentials(operation_id, expected_hashes)
             raise OSError("agent_unavailable")
 
     runtime.coordinator.environments[runtime.environment.registry_id] = ReplyLostAfterReplace(
@@ -213,6 +213,138 @@ def test_drift_is_rechecked_and_pending_attachment_is_not_active(
         attachment = db.scalar(select(Attachment).where(Attachment.client_id == client["id"]))
         assert attachment.sync_state == "conflict"
         assert attachment.applied_state == "pending"
+
+
+def test_external_edit_after_prepare_cannot_be_overwritten(
+    sandbox_authenticated, sandbox_app
+):
+    inbound_id = adopt(sandbox_authenticated)
+    runtime = sandbox_app.state.sandbox
+    client = create_client(sandbox_authenticated, "late-drift-user")
+
+    class ExternalEditAfterPrepare:
+        def __init__(self, base):
+            self.base = base
+
+        def __getattr__(self, name):
+            return getattr(self.base, name)
+
+        def prepare_credentials(self, operation_id, content):
+            self.base.prepare_credentials(operation_id, content)
+            self.base.files["rules"].write_bytes(b"# changed during apply\n")
+
+    runtime.coordinator.environments[runtime.environment.registry_id] = ExternalEditAfterPrepare(
+        runtime.environment
+    )
+    response = attach(sandbox_authenticated, client["id"], inbound_id, "late-drift-key")
+    assert response.status_code == 201
+    assert response.json()["operation"]["state"] == "failed"
+    assert response.json()["operation"]["error_code"] == "drift_conflict"
+    assert b"late-drift-user" not in runtime.environment.files["credentials"].read_bytes()
+    with sandbox_app.state.sessions() as db:
+        assert db.get(Inbound, inbound_id).config_state == "drift"
+
+
+def test_restart_refuses_drift_without_invoking_service(sandbox_authenticated, sandbox_app):
+    inbound_id = adopt(sandbox_authenticated)
+    runtime = sandbox_app.state.sandbox
+    runtime.environment.files["rules"].write_bytes(b"# external rule\n")
+    before = list(runtime.provider.actions)
+    response = sandbox_authenticated.post(
+        f"/api/inbounds/{inbound_id}/restart",
+        json={"idempotency_key": "restart-after-drift"},
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "drift_conflict"
+    assert runtime.provider.actions == before
+    with sandbox_app.state.sessions() as db:
+        assert db.get(Inbound, inbound_id).config_state == "drift"
+
+
+def test_commit_precondition_preserves_edit_after_last_snapshot(
+    sandbox_authenticated, sandbox_app
+):
+    inbound_id = adopt(sandbox_authenticated)
+    runtime = sandbox_app.state.sandbox
+    client = create_client(sandbox_authenticated, "commit-drift-user")
+    original = runtime.environment.files["credentials"].read_bytes()
+
+    class ExternalEditAtCommit:
+        def __init__(self, base):
+            self.base = base
+
+        def __getattr__(self, name):
+            return getattr(self.base, name)
+
+        def commit_credentials(self, operation_id, expected_hashes):
+            self.base.files["rules"].write_bytes(b"# edited at commit\n")
+            self.base.commit_credentials(operation_id, expected_hashes)
+
+    runtime.coordinator.environments[runtime.environment.registry_id] = ExternalEditAtCommit(
+        runtime.environment
+    )
+    response = attach(sandbox_authenticated, client["id"], inbound_id, "commit-drift-key")
+    assert response.status_code == 201
+    assert response.json()["operation"]["state"] == "failed"
+    assert response.json()["operation"]["error_code"] == "drift_conflict"
+    assert runtime.environment.files["rules"].read_bytes() == b"# edited at commit\n"
+    assert runtime.environment.files["credentials"].read_bytes() == original
+    with sandbox_app.state.sessions() as db:
+        assert db.get(Inbound, inbound_id).config_state == "drift"
+
+
+@pytest.mark.parametrize("edited_file", ["rules", "credentials"])
+def test_rollback_refuses_unknown_external_state(
+    sandbox_authenticated, sandbox_app, edited_file
+):
+    inbound_id = adopt(sandbox_authenticated)
+    runtime = sandbox_app.state.sandbox
+    client = create_client(sandbox_authenticated, f"rollback-drift-{edited_file}")
+    external_content = b"# external edit during health\n"
+    original_health = runtime.provider.health
+    edited = False
+
+    def health_with_external_edit(inbound):
+        nonlocal edited
+        if not edited:
+            edited = True
+            runtime.environment.files[edited_file].write_bytes(external_content)
+            return False
+        return original_health(inbound)
+
+    runtime.provider.health = health_with_external_edit
+    response = attach(
+        sandbox_authenticated, client["id"], inbound_id,
+        f"rollback-drift-{edited_file}-key",
+    )
+    assert response.status_code == 201
+    assert response.json()["operation"]["state"] == "needs_recovery"
+    assert response.json()["operation"]["error_code"] == "rollback_drift_conflict"
+    assert runtime.environment.files[edited_file].read_bytes() == external_content
+    with sandbox_app.state.sessions() as db:
+        assert db.get(Inbound, inbound_id).config_state == "recovery_required"
+
+
+def test_apply_does_not_report_success_after_external_edit_during_health(
+    sandbox_authenticated, sandbox_app
+):
+    inbound_id = adopt(sandbox_authenticated)
+    runtime = sandbox_app.state.sandbox
+    client = create_client(sandbox_authenticated, "health-drift-user")
+    original_health = runtime.provider.health
+    external_rules = b"# edited while checking health\n"
+
+    def health_with_edit(inbound):
+        runtime.environment.files["rules"].write_bytes(external_rules)
+        return original_health(inbound)
+
+    runtime.provider.health = health_with_edit
+    response = attach(sandbox_authenticated, client["id"], inbound_id, "health-drift-key")
+    assert response.status_code == 201
+    assert response.json()["operation"]["state"] == "needs_recovery"
+    assert runtime.environment.files["rules"].read_bytes() == external_rules
+    with sandbox_app.state.sessions() as db:
+        assert db.get(Inbound, inbound_id).config_state == "recovery_required"
 
 
 def test_global_disable_rollback_keeps_effective_access_visible_as_error(

@@ -171,6 +171,10 @@ def client_access(client_id: str, data: ClientAccess, request: Request,
 def inbounds(request: Request, _=Depends(admin), db=Depends(db_session)):
     rows = db.scalars(select(Inbound).order_by(Inbound.name)).all()
     runtime = request.app.state.management
+    execution_mode = (
+        "sandbox" if request.app.state.sandbox is not None
+        else "linux" if request.app.state.linux is not None else "unavailable"
+    )
     items = []
     for row in rows:
         metadata = json.loads(row.metadata_json or "{}")
@@ -194,6 +198,10 @@ def inbounds(request: Request, _=Depends(admin), db=Depends(db_session)):
             "client_count": count, "config_state": "pending" if current else row.config_state,
             "service_status": service_status,
             "operation": operation_output(current) if current else None,
+            "execution_mode": (
+                execution_mode if runtime and row.registry_id == runtime.environment.registry_id
+                else "unavailable"
+            ),
         })
     adoption_available = bool(
         runtime
@@ -219,6 +227,10 @@ def inbound_detail(inbound_id: str, request: Request, _=Depends(admin), db=Depen
         Operation.inbound_id == inbound_id
     ).order_by(Operation.created_at.desc()).limit(20)).all()
     runtime = request.app.state.management
+    execution_mode = (
+        "sandbox" if request.app.state.sandbox is not None
+        else "linux" if request.app.state.linux is not None else "unavailable"
+    )
     service_status = "unknown"
     if runtime and row.registry_id == runtime.environment.registry_id:
         if hasattr(runtime.provider, "running"):
@@ -232,6 +244,10 @@ def inbound_detail(inbound_id: str, request: Request, _=Depends(admin), db=Depen
         "id": row.id, "name": row.name, "enabled": row.enabled,
         "kind": row.kind, "public_address": row.public_address,
         "config_state": row.config_state, "metadata": metadata,
+        "execution_mode": (
+            execution_mode if runtime and row.registry_id == runtime.environment.registry_id
+            else "unavailable"
+        ),
         "service_status": service_status,
         "attachments": [{
             "id": attachment.id, "client_id": client.id, "username": client.username,

@@ -83,6 +83,24 @@ def test_protocol_rejects_malformed_oversized_version_operation_and_dynamic_fiel
             decode_request(payload)
 
 
+def test_commit_request_requires_typed_hash_precondition():
+    operation_id = str(uuid.uuid4())
+    payload = request(operation="files.commit_credentials", arguments={
+        "operation_id": operation_id,
+        "expected_hashes": {key: "0" * 64 for key in ("vpn", "hosts", "rules", "credentials")},
+    })
+    _decoded, arguments = decode_request(payload)
+    assert arguments.expected_hashes["credentials"] == "0" * 64
+    with pytest.raises(ProtocolError, match="malformed_request"):
+        decode_request(request(operation="files.commit_credentials", arguments={
+            "operation_id": operation_id,
+        }))
+    with pytest.raises(ProtocolError, match="malformed_request"):
+        decode_request(request(operation="files.commit_credentials", arguments={
+            "operation_id": operation_id, "expected_hashes": {"credentials": "bad"},
+        }))
+
+
 class FakeWriter:
     def __init__(self):
         self.output = b""

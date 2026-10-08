@@ -1,3 +1,4 @@
+import hashlib
 import multiprocessing
 import os
 import socket
@@ -73,11 +74,34 @@ def test_secure_atomic_backup_restore_and_fsync(tmp_path, monkeypatch):
     assert files.snapshot(instance)["credentials"] == b"credentials\n"
     files.create_backup(instance, operation_id)
     files.prepare_credentials(instance, operation_id, b"new credentials\n")
-    files.commit_credentials(instance, operation_id)
+    expected_hashes = {
+        key: hashlib.sha256(value).hexdigest()
+        for key, value in files.snapshot(instance).items()
+    }
+    files.commit_credentials(instance, operation_id, expected_hashes)
     assert instance.files["credentials"].read_bytes() == b"new credentials\n"
     files.restore_credentials(instance, operation_id)
     assert instance.files["credentials"].read_bytes() == b"credentials\n"
     assert len(calls) >= 8
+
+
+def test_secure_commit_refuses_external_edit_without_replacing_credentials(tmp_path):
+    instance = make_instance(tmp_path)
+    files = SecureManagedFiles()
+    operation_id = str(uuid.uuid4())
+    expected_hashes = {
+        key: hashlib.sha256(value).hexdigest()
+        for key, value in files.snapshot(instance).items()
+    }
+    files.prepare_credentials(instance, operation_id, b"new credentials\n")
+    instance.files["rules"].write_bytes(b"external rules\n")
+
+    with pytest.raises(FileSecurityError, match="drift_conflict"):
+        files.commit_credentials(instance, operation_id, expected_hashes)
+
+    assert instance.files["credentials"].read_bytes() == b"credentials\n"
+    assert instance.files["rules"].read_bytes() == b"external rules\n"
+    files.cleanup(instance, operation_id)
 
 
 def test_restore_after_crash_with_prepared_credentials(tmp_path):

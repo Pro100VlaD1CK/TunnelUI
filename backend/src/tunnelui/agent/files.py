@@ -1,4 +1,6 @@
+import hashlib
 import os
+import re
 import stat
 import uuid
 from contextlib import contextmanager
@@ -94,8 +96,23 @@ class SecureManagedFiles:
                 os.close(descriptor)
             os.fsync(parent_fd)
 
-    def commit_credentials(self, instance: ManagedInstance, operation_id: str) -> None:
+    def commit_credentials(
+        self, instance: ManagedInstance, operation_id: str,
+        expected_hashes: dict[str, str] | None = None,
+    ) -> None:
         _operation_id(operation_id)
+        if expected_hashes is not None:
+            if (set(expected_hashes) != set(FILE_IDS) or any(
+                not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
+                for value in expected_hashes.values()
+            )):
+                raise FileSecurityError("invalid_expected_hashes")
+            actual = {
+                key: hashlib.sha256(self._read_managed(instance, key)).hexdigest()
+                for key in FILE_IDS
+            }
+            if actual != expected_hashes:
+                raise FileSecurityError("drift_conflict")
         path = instance.files["credentials"]
         with self._parent(instance, path) as parent_fd:
             current_fd = self._open_managed_fd(instance, "credentials", parent_fd)
