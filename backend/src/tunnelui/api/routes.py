@@ -45,6 +45,14 @@ def sandbox(request: Request):
     return runtime
 
 
+def adoption(request: Request):
+    runtime = management(request)
+    service = getattr(runtime, "adoption", None)
+    if service is None:
+        raise DomainError("management_unavailable", 503)
+    return service
+
+
 def set_cookie(response: Response, request: Request, token: str, age: int):
     response.set_cookie(COOKIE, token, max_age=age, httponly=True,
                         secure=request.app.state.settings.secure_cookie,
@@ -163,6 +171,10 @@ def client_access(client_id: str, data: ClientAccess, request: Request,
 def inbounds(request: Request, _=Depends(admin), db=Depends(db_session)):
     rows = db.scalars(select(Inbound).order_by(Inbound.name)).all()
     runtime = request.app.state.management
+    execution_mode = (
+        "sandbox" if request.app.state.sandbox is not None
+        else "linux" if request.app.state.linux is not None else "unavailable"
+    )
     items = []
     for row in rows:
         metadata = json.loads(row.metadata_json or "{}")
@@ -186,10 +198,20 @@ def inbounds(request: Request, _=Depends(admin), db=Depends(db_session)):
             "client_count": count, "config_state": "pending" if current else row.config_state,
             "service_status": service_status,
             "operation": operation_output(current) if current else None,
+            "execution_mode": (
+                execution_mode if runtime and row.registry_id == runtime.environment.registry_id
+                else "unavailable"
+            ),
         })
-    return {"items": items, "adoption_available": bool(request.app.state.sandbox) and not any(
-        row.registry_id == runtime.environment.registry_id for row in rows
-    ) if runtime else False}
+    adoption_available = bool(
+        runtime
+        and getattr(runtime, "adoption", None)
+        and not any(
+            row.registry_id == runtime.environment.registry_id
+            for row in rows
+        )
+    )
+    return {"items": items, "adoption_available": adoption_available}
 
 
 @router.get("/inbounds/{inbound_id}")
@@ -205,6 +227,10 @@ def inbound_detail(inbound_id: str, request: Request, _=Depends(admin), db=Depen
         Operation.inbound_id == inbound_id
     ).order_by(Operation.created_at.desc()).limit(20)).all()
     runtime = request.app.state.management
+    execution_mode = (
+        "sandbox" if request.app.state.sandbox is not None
+        else "linux" if request.app.state.linux is not None else "unavailable"
+    )
     service_status = "unknown"
     if runtime and row.registry_id == runtime.environment.registry_id:
         if hasattr(runtime.provider, "running"):
@@ -218,6 +244,10 @@ def inbound_detail(inbound_id: str, request: Request, _=Depends(admin), db=Depen
         "id": row.id, "name": row.name, "enabled": row.enabled,
         "kind": row.kind, "public_address": row.public_address,
         "config_state": row.config_state, "metadata": metadata,
+        "execution_mode": (
+            execution_mode if runtime and row.registry_id == runtime.environment.registry_id
+            else "unavailable"
+        ),
         "service_status": service_status,
         "attachments": [{
             "id": attachment.id, "client_id": client.id, "username": client.username,
@@ -234,19 +264,20 @@ def inbound_detail(inbound_id: str, request: Request, _=Depends(admin), db=Depen
 
 @router.get("/trusttunnel/discovery")
 def trusttunnel_discovery(request: Request, _=Depends(admin)):
-    return sandbox(request).adoption.discover()
+    return adoption(request).discover()
 
 
 @router.post("/trusttunnel/adoption/preview")
 def trusttunnel_preview(request: Request, _=Depends(admin)):
-    return sandbox(request).adoption.detect()
+    return adoption(request).detect()
 
 
 @router.post("/trusttunnel/adoption/confirm", status_code=201)
 def trusttunnel_confirm(data: AdoptionConfirm, request: Request,
                         identity=Depends(admin), db=Depends(db_session)):
-    runtime = sandbox(request)
-    return runtime.adoption.confirm(
+    service = adoption(request)
+    runtime = management(request)
+    return service.confirm(
         data.preview_id, db, runtime.coordinator.box, identity.username
     )
 

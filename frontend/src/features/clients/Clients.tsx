@@ -19,7 +19,7 @@ export function Clients() {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<string>('all');
   const [page, setPage] = useState(1);
-  const [editor, setEditor] = useState<{ open: boolean; client?: Client }>({ open: false });
+  const [editor, setEditor] = useState<{ open: boolean; client?: Client; session: number }>({ open: false, session: 0 });
   const [action, setAction] = useState<{ client: Client; remove: boolean }>();
   const [attachmentAction, setAttachmentAction] = useState<{ client: Client; attachment: Client['attachments'][number]; detach: boolean }>();
   const navigate = useNavigate();
@@ -31,7 +31,7 @@ export function Clients() {
     setAction({ client, remove });
   }
   return <>
-    <div className="page-heading"><div><Typography.Title level={1}>Клиенты</Typography.Title><Typography.Text type="secondary">Глобальные записи пользователей · {query.data?.total ?? '—'}</Typography.Text></div><Button type="primary" icon={<PlusOutlined />} onClick={() => setEditor({ open: true })}>Добавить клиента</Button></div>
+    <div className="page-heading"><div><Typography.Title level={1}>Клиенты</Typography.Title><Typography.Text type="secondary">Глобальные записи пользователей · {query.data?.total ?? '—'}</Typography.Text></div><Button type="primary" icon={<PlusOutlined />} onClick={() => setEditor(current => ({ open: true, session: current.session + 1 }))}>Добавить клиента</Button></div>
     <div className="toolbar"><Input.Search aria-label="Поиск клиентов" placeholder="Username или имя" prefix={<SearchOutlined />} allowClear onSearch={v => { setSearch(v); setPage(1); }} /><Select aria-label="Состояние записи" value={filter} onChange={v => { setFilter(v); setPage(1); }} options={[{ value: 'all', label: 'Все записи' }, { value: 'true', label: 'Включённые' }, { value: 'false', label: 'Отключённые' }]} /></div>
     <Button className="refresh-list" icon={<ReloadOutlined />} onClick={() => query.refetch()} loading={query.isFetching}>Обновить список</Button>
     <Typography.Paragraph type="secondary">Глобальное состояние клиента и фактически применённое состояние каждой привязки показаны отдельно. Метрики появятся после Phase 3.</Typography.Paragraph>
@@ -43,7 +43,7 @@ export function Clients() {
       { title: 'Входящие', width: 230, render: (_, row) => row.attachments.length ? <Space size={[4, 4]} wrap>{row.attachments.map(item => <Tag key={item.id} color={item.sync_state === 'active' ? 'success' : item.sync_state === 'pending' ? 'processing' : item.sync_state === 'error' || item.sync_state === 'conflict' ? 'error' : undefined}>{item.inbound_name} · {syncLabels[item.sync_state]}</Tag>)}</Space> : <Typography.Text type="secondary">Нет доступа</Typography.Text> },
       { title: 'Истекает', width: 160, render: (_, r) => r.expires_at ? new Date(r.expires_at * 1000).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' }) : 'Без срока' },
       { title: '', width: 56, fixed: 'right', render: (_, r) => <Dropdown trigger={['click']} menu={{ items: [
-        { key: 'edit', label: 'Редактировать', onClick: () => setEditor({ open: true, client: r }) },
+        { key: 'edit', label: 'Редактировать', onClick: () => setEditor(current => ({ open: true, client: r, session: current.session + 1 })) },
         { key: 'toggle', label: r.enabled ? 'Отключить глобальную запись' : 'Включить глобальную запись', onClick: () => confirm(r, false) },
         { type: 'divider' }, { key: 'profile', label: 'QR / профиль', disabled: !r.attachments.some(item => item.applied_state === 'active'), onClick: () => navigate(`/profiles?client=${r.id}`) },
         ...r.attachments.flatMap(item => [{ key: `toggle-${item.id}`, label: `${item.enabled ? 'Отключить' : 'Включить'} доступ · ${item.inbound_name}`, onClick: () => setAttachmentAction({ client: r, attachment: item, detach: false }) }, { key: `detach-${item.id}`, danger: true, label: `Отвязать · ${item.inbound_name}`, onClick: () => setAttachmentAction({ client: r, attachment: item, detach: true }) }]),
@@ -51,7 +51,7 @@ export function Clients() {
       ] }}><Button type="text" aria-label={`Действия: ${r.username}`} icon={<MoreOutlined />} /></Dropdown> },
     ]} />}
     <Space className="table-note"><Typography.Text type="secondary">Online, сессии, трафик и IP появятся после подключения метрик. Трафик — с запуска endpoint.</Typography.Text></Space>
-    <ClientEditor open={editor.open} client={editor.client} close={() => setEditor({ open: false })} />
+    <ClientEditor key={editor.session} open={editor.open} client={editor.client} close={() => setEditor(current => ({ ...current, open: false }))} />
     {action && <ClientActionModal {...action} close={() => setAction(undefined)} />}
     {attachmentAction && <AttachmentActionModal {...attachmentAction} close={() => setAttachmentAction(undefined)} />}
   </>;

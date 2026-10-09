@@ -41,8 +41,10 @@ class TrustTunnelCliExporter:
         output = output.strip()
         if return_code or not output:
             raise ExportError("profile_export_failed")
-        if format == "deeplink" and not output.startswith(b"tt://"):
-            raise ExportError("profile_export_invalid")
+        if format == "deeplink":
+            output = output.splitlines()[0].strip()
+            if not output.startswith(b"tt://"):
+                raise ExportError("profile_export_invalid")
         return output
 
     def _verify_capability(

@@ -14,6 +14,7 @@ from tunnelui.domain.errors import DomainError
 from tunnelui.integrations.trusttunnel import (
     Credential,
     parse_credentials,
+    preview,
     render_credentials,
     source_hash,
 )
@@ -43,10 +44,11 @@ class ManagedEnvironment(Protocol):
     public_address: str
 
     def snapshot(self) -> dict[str, bytes]: ...
+    def adoption_metadata(self, snapshot: dict[str, bytes]) -> tuple[dict, str, str]: ...
     def operation(self, operation_id: str): ...
     def create_backup(self, operation_id: str, snapshot: dict[str, bytes]) -> None: ...
     def prepare_credentials(self, operation_id: str, content: bytes) -> None: ...
-    def commit_credentials(self, operation_id: str) -> None: ...
+    def commit_credentials(self, operation_id: str, expected_hashes: dict[str, str]) -> None: ...
     def restore_credentials(self, operation_id: str) -> None: ...
     def cleanup(self, operation_id: str) -> None: ...
 
@@ -71,6 +73,13 @@ class SandboxEnvironment:
             result[key] = path.read_bytes()
         return result
 
+    def adoption_metadata(self, snapshot: dict[str, bytes]) -> tuple[dict, str, str]:
+        return (
+            preview(self.working_directory, self.exec_start, snapshot, self.version),
+            self.public_address,
+            self.registry_id,
+        )
+
     @contextmanager
     def operation(self, operation_id: str):
         del operation_id
@@ -84,7 +93,9 @@ class SandboxEnvironment:
             self.files["credentials"], content, operation_id
         )
 
-    def commit_credentials(self, operation_id: str) -> None:
+    def commit_credentials(self, operation_id: str, expected_hashes: dict[str, str]) -> None:
+        if {key: source_hash(value) for key, value in self.snapshot().items()} != expected_hashes:
+            raise SystemOperationError("drift_conflict")
         commit_atomic(self.files["credentials"], self._prepared.pop(operation_id))
 
     def restore_credentials(self, operation_id: str) -> None:
@@ -173,7 +184,10 @@ class TrustTunnelCoordinator:
                 with environment.operation(operation_id):
                     if active_operation(db, inbound_id):
                         raise DomainError("operation_in_progress")
-                    original = environment.snapshot()
+                    try:
+                        original = environment.snapshot()
+                    except OSError:
+                        raise DomainError("management_unavailable", 503) from None
                     current_hashes = {key: source_hash(value) for key, value in original.items()}
                     expected = hashes(inbound.hashes_json)
                     operation = Operation(
@@ -203,12 +217,20 @@ class TrustTunnelCoordinator:
                     changed = False
                     try:
                         environment.prepare_credentials(operation.id, content)
+                        operation.result_hashes_json = json.dumps({
+                            **current_hashes, "credentials": source_hash(content),
+                        })
                         transition(db, operation, "writing")
                         self._interrupt("after_temp_write")
+                        if {
+                            key: source_hash(value)
+                            for key, value in environment.snapshot().items()
+                        } != current_hashes:
+                            raise SystemOperationError("drift_conflict")
                         changed = True
                         # A lost agent reply after rename leaves the replace outcome
                         # unknown. Treat the boundary as changed and use the backup.
-                        environment.commit_credentials(operation.id)
+                        environment.commit_credentials(operation.id, current_hashes)
                         transition(db, operation, "applying")
                         self._interrupt("after_replace")
                         environment.provider.restart(inbound_id)
@@ -217,9 +239,18 @@ class TrustTunnelCoordinator:
                         self._interrupt("during_health")
                         if not environment.provider.health(inbound_id):
                             raise SystemOperationError("health_failed")
+                        result = environment.snapshot()
+                        if {
+                            key: source_hash(value) for key, value in result.items()
+                        } != hashes(operation.result_hashes_json):
+                            raise SystemOperationError("post_apply_drift_conflict")
                     except SimulatedCrash:
                         raise
                     except (OSError, SystemOperationError) as error:
+                        if str(error) == "drift_conflict":
+                            # The agent reports this only before its rename; the
+                            # operation must not restore over the external edit.
+                            changed = False
                         if not changed:
                             try:
                                 environment.cleanup(operation.id)
@@ -236,6 +267,13 @@ class TrustTunnelCoordinator:
                                 return operation_output(operation)
                             transition(db, operation, "failed", str(error))
                             self._mark_error(db, inbound_id)
+                            if str(error) == "drift_conflict":
+                                inbound.config_state = "drift"
+                                for attachment in db.scalars(select(Attachment).where(
+                                    Attachment.inbound_id == inbound_id,
+                                    Attachment.sync_state == "error",
+                                )).all():
+                                    attachment.sync_state = "conflict"
                             record_result(db, admin, "config.apply", "inbound", inbound_id,
                                           "error", "Не удалось применить конфигурацию")
                             db.commit()
@@ -243,7 +281,6 @@ class TrustTunnelCoordinator:
                         return self._rollback(
                             db, inbound, operation, environment, admin, str(error)
                         )
-                    result = environment.snapshot()
                     result_hashes = {key: source_hash(value) for key, value in result.items()}
                     operation.result_hashes_json = json.dumps(result_hashes)
                     inbound.hashes_json = operation.result_hashes_json
@@ -262,12 +299,20 @@ class TrustTunnelCoordinator:
             inbound = db.get(Inbound, inbound_id)
             if not inbound:
                 raise DomainError("inbound_not_found", 404)
-            snapshot = self.environment(inbound).snapshot()
-            current = {key: source_hash(value) for key, value in snapshot.items()}
-            drift = current != hashes(inbound.hashes_json)
-            inbound.config_state = "drift" if drift else "synced"
-            inbound.updated_at = now()
-            db.commit()
+            if active_operation(db, inbound_id):
+                raise DomainError("operation_in_progress")
+            environment = self.environment(inbound)
+            with self.locks.acquire(inbound_id), environment.operation(str(uuid.uuid4())):
+                try:
+                    snapshot = environment.snapshot()
+                except OSError:
+                    raise DomainError("management_unavailable", 503) from None
+                current = {key: source_hash(value) for key, value in snapshot.items()}
+                drift = current != hashes(inbound.hashes_json)
+                if inbound.config_state not in {"recovery_required", "unmanaged"}:
+                    inbound.config_state = "drift" if drift else "synced"
+                    inbound.updated_at = now()
+                    db.commit()
             return {"drift": drift, "config_state": inbound.config_state,
                     "changed_files": sorted(
                         key for key, value in current.items()
@@ -293,38 +338,79 @@ class TrustTunnelCoordinator:
             inbound = db.get(Inbound, inbound_id)
             if not inbound:
                 raise DomainError("inbound_not_found", 404)
+            if not inbound.enabled:
+                raise DomainError("inbound_not_managed")
+            if inbound.config_state == "recovery_required":
+                raise DomainError("recovery_required")
+            if active_operation(db, inbound_id):
+                raise DomainError("operation_in_progress")
             environment = self.environment(inbound)
-            snapshot = environment.snapshot()
-            external = {item.username: item for item in parse_credentials(snapshot["credentials"])}
-            rows = db.execute(select(Attachment, Client).join(
-                Client, Client.id == Attachment.client_id
-            ).where(Attachment.inbound_id == inbound_id)).all()
-            local = {client.username: (attachment, client) for attachment, client in rows}
-            if set(local) != set(external):
-                raise DomainError("reimport_mapping_required")
-            for username, credential in external.items():
-                attachment, _ = local[username]
-                attachment.secret_ciphertext = self.box.encrypt(credential.password)
-                attachment.max_http2_conns = credential.max_http2_conns
-                attachment.max_http3_conns = credential.max_http3_conns
-                attachment.enabled = True
-                attachment.desired_state = "active"
-                attachment.applied_state = "active"
-                attachment.sync_state = "active"
-                attachment.updated_at = now()
-            current = {key: source_hash(value) for key, value in snapshot.items()}
-            inbound.hashes_json = json.dumps(current)
-            inbound.config_state = "synced"
-            inbound.updated_at = now()
-            record_result(db, admin, "inbound.reimport", "inbound", inbound_id, "success")
-            db.commit()
-            return {"config_state": "synced", "client_count": len(external)}
+            with self.locks.acquire(inbound_id), environment.operation(str(uuid.uuid4())):
+                try:
+                    snapshot = environment.snapshot()
+                except OSError:
+                    raise DomainError("management_unavailable", 503) from None
+                external = {
+                    item.username: item for item in parse_credentials(snapshot["credentials"])
+                }
+                rows = db.execute(select(Attachment, Client).join(
+                    Client, Client.id == Attachment.client_id
+                ).where(Attachment.inbound_id == inbound_id)).all()
+                local = {client.username: (attachment, client) for attachment, client in rows}
+                if set(local) != set(external):
+                    raise DomainError("reimport_mapping_required")
+                if any(
+                    attachment.desired_state != attachment.applied_state
+                    for attachment, _client in rows
+                ):
+                    raise DomainError("pending_changes_require_cancel")
+                metadata, public_address, _service = environment.adoption_metadata(snapshot)
+                if not metadata["verified"]:
+                    raise DomainError("unsupported_endpoint_version")
+                try:
+                    unchanged = environment.snapshot() == snapshot
+                except OSError:
+                    raise DomainError("management_unavailable", 503) from None
+                if not unchanged:
+                    raise DomainError("drift_conflict")
+                safe_metadata = {
+                    key: value for key, value in metadata.items() if key != "hashes"
+                }
+                if (
+                    hashes(inbound.hashes_json) == metadata["hashes"]
+                    and json.loads(inbound.metadata_json or "{}") == safe_metadata
+                    and inbound.public_address == public_address
+                    and inbound.config_state == "synced"
+                ):
+                    return {"config_state": "synced", "client_count": len(external)}
+                for username, credential in external.items():
+                    attachment, _ = local[username]
+                    attachment.secret_ciphertext = self.box.encrypt(credential.password)
+                    attachment.max_http2_conns = credential.max_http2_conns
+                    attachment.max_http3_conns = credential.max_http3_conns
+                    attachment.enabled = True
+                    attachment.desired_state = "active"
+                    attachment.applied_state = "active"
+                    attachment.sync_state = "active"
+                    attachment.updated_at = now()
+                inbound.metadata_json = json.dumps(safe_metadata)
+                inbound.public_address = public_address
+                inbound.hashes_json = json.dumps(metadata["hashes"])
+                inbound.config_state = "synced"
+                inbound.updated_at = now()
+                record_result(db, admin, "inbound.reimport", "inbound", inbound_id, "success")
+                db.commit()
+                return {"config_state": "synced", "client_count": len(external)}
 
     def restart(self, inbound_id: str, idempotency_key: str, admin: str) -> dict:
         with self.sessions() as db:
             inbound = db.get(Inbound, inbound_id)
             if not inbound:
                 raise DomainError("inbound_not_found", 404)
+            if not inbound.enabled:
+                raise DomainError("inbound_not_managed")
+            if inbound.config_state == "recovery_required":
+                raise DomainError("recovery_required")
             environment = self.environment(inbound)
             fingerprint = self._fingerprint(inbound_id, "restart", idempotency_key)
             existing = db.scalar(select(Operation).where(
@@ -339,9 +425,18 @@ class TrustTunnelCoordinator:
                 with environment.operation(operation_id):
                     if active_operation(db, inbound_id):
                         raise DomainError("operation_in_progress")
-                    expected = {
-                        key: source_hash(value) for key, value in environment.snapshot().items()
-                    }
+                    try:
+                        expected = {
+                            key: source_hash(value)
+                            for key, value in environment.snapshot().items()
+                        }
+                    except OSError:
+                        raise DomainError("management_unavailable", 503) from None
+                    if expected != hashes(inbound.hashes_json):
+                        inbound.config_state = "drift"
+                        inbound.updated_at = now()
+                        db.commit()
+                        raise DomainError("drift_conflict")
                     operation = Operation(
                         id=operation_id,
                         inbound_id=inbound_id, kind="restart", state="pending",
@@ -401,17 +496,38 @@ class TrustTunnelCoordinator:
             transition(db, operation, "rolling_back", cause)
         self._interrupt("during_rollback")
         try:
+            current = {
+                key: source_hash(value)
+                for key, value in environment.snapshot().items()
+            }
+            expected = hashes(operation.expected_hashes_json)
+            written = hashes(operation.result_hashes_json)
+            if any(
+                current.get(key) != value
+                for key, value in expected.items() if key != "credentials"
+            ) or current.get("credentials") not in {
+                expected.get("credentials"), written.get("credentials")
+            }:
+                raise SystemOperationError("rollback_drift_conflict")
             environment.cleanup(operation.id)
             environment.restore_credentials(operation.id)
             environment.provider.restart(inbound.id)
             if not environment.provider.health(inbound.id):
                 raise SystemOperationError("rollback_health_failed")
-        except (OSError, SystemOperationError):
+            if {
+                key: source_hash(value)
+                for key, value in environment.snapshot().items()
+            } != expected:
+                raise SystemOperationError("rollback_drift_conflict")
+        except (OSError, SystemOperationError) as error:
             inbound.config_state = "recovery_required"
             inbound.updated_at = now()
             self._mark_error(db, inbound.id)
             db.commit()
-            transition(db, operation, "needs_recovery", "rollback_failed")
+            transition(db, operation, "needs_recovery", (
+                "rollback_drift_conflict" if str(error) == "rollback_drift_conflict"
+                else "rollback_failed"
+            ))
             record_result(db, admin, "config.rollback", "inbound", inbound.id,
                           "error", "Откат не завершён; требуется восстановление")
         else:

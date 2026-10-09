@@ -4,7 +4,7 @@ import re
 import uuid
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 PROTOCOL_VERSION = 1
 MAX_REQUEST_BYTES = 6 * 1024 * 1024
@@ -47,6 +47,19 @@ class PrepareArguments(OperationArguments):
         return value
 
 
+class CommitArguments(OperationArguments):
+    expected_hashes: dict[str, str]
+
+    @model_validator(mode="after")
+    def valid_hashes(self):
+        if set(self.expected_hashes) != {"vpn", "hosts", "credentials", "rules"} or any(
+            not re.fullmatch(r"[0-9a-f]{64}", value)
+            for value in self.expected_hashes.values()
+        ):
+            raise ValueError("invalid expected hashes")
+        return self
+
+
 class ExportArguments(StrictModel):
     username: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}$")
     format: Literal["deeplink", "toml"]
@@ -61,6 +74,7 @@ class AgentRequest(StrictModel):
         "files.prepare_credentials", "files.commit_credentials",
         "files.restore_credentials", "files.cleanup", "service.status",
         "service.restart", "service.reload", "health.probe", "profile.export",
+        "managed.describe",
     ]
     arguments: dict[str, object] = Field(default_factory=dict)
 
@@ -71,7 +85,7 @@ ARGUMENT_TYPES: dict[str, type[StrictModel]] = {
     "files.snapshot": OperationArguments,
     "files.backup": OperationArguments,
     "files.prepare_credentials": PrepareArguments,
-    "files.commit_credentials": OperationArguments,
+    "files.commit_credentials": CommitArguments,
     "files.restore_credentials": OperationArguments,
     "files.cleanup": OperationArguments,
     "service.status": EmptyArguments,
@@ -79,6 +93,7 @@ ARGUMENT_TYPES: dict[str, type[StrictModel]] = {
     "service.reload": OperationArguments,
     "health.probe": EmptyArguments,
     "profile.export": ExportArguments,
+    "managed.describe": EmptyArguments,
 }
 
 

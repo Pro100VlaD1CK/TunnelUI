@@ -8,6 +8,7 @@ from tunnelui.agent.health import HealthProbe
 from tunnelui.agent.locking import LockError, ProcessLocks
 from tunnelui.agent.protocol import (
     AgentRequest,
+    CommitArguments,
     EmptyArguments,
     ExportArguments,
     OperationArguments,
@@ -49,6 +50,24 @@ class AgentDispatcher:
         try:
             instance = self.registry.get(request.managed_id)
             operation = request.operation
+            if operation == "managed.describe":
+                _args(arguments, EmptyArguments)
+                return {
+                    "service": instance.service,
+                    "working_directory": str(instance.working_directory),
+                    "binary_path": str(instance.binary),
+                    "vpn_config_path": str(instance.files["vpn"]),
+                    "hosts_config_path": str(instance.files["hosts"]),
+                    "credentials_path": str(instance.files["credentials"]),
+                    "rules_path": str(instance.files["rules"]),
+                    "public_address": instance.public_address,
+                    "expected_version": instance.expected_version,
+                    "health_host": instance.health_host,
+                    "health_port": instance.health_port,
+                    "tls_server_name": instance.tls_server_name,
+                    "quic_configured": instance.quic_configured,
+                    "allow_reload": instance.allow_reload,
+                }
             if operation == "lock.acquire":
                 args = _args(arguments, OperationArguments)
                 self.locks.acquire(instance, str(args.operation_id), peer_pid)
@@ -101,7 +120,10 @@ class AgentDispatcher:
                 prepare = _args(arguments, PrepareArguments)
                 self.files.prepare_credentials(instance, operation_id, prepare.content())
             elif operation == "files.commit_credentials":
-                self.files.commit_credentials(instance, operation_id)
+                commit = _args(arguments, CommitArguments)
+                self.files.commit_credentials(
+                    instance, operation_id, commit.expected_hashes
+                )
             elif operation == "files.restore_credentials":
                 self.files.restore_credentials(instance, operation_id)
             elif operation == "files.cleanup":
