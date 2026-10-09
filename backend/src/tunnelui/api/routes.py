@@ -10,6 +10,7 @@ from tunnelui.api.schemas import (
     AttachmentDetach,
     AttachmentState,
     ClientAccess,
+    ClientDelete,
     ClientInput,
     ClientOutput,
     ClientUpdate,
@@ -17,6 +18,7 @@ from tunnelui.api.schemas import (
     FakeScenario,
     IdempotentAction,
     LoginInput,
+    PendingCancel,
 )
 from tunnelui.domain.errors import DomainError
 from tunnelui.models import Attachment, AuditEvent, Client, Inbound, Operation, now
@@ -24,6 +26,8 @@ from tunnelui.repositories.clients import ClientRepository
 from tunnelui.services import auth
 from tunnelui.services.attachments import AttachmentService
 from tunnelui.services.audit import record
+from tunnelui.services.client_access import ClientAccessService
+from tunnelui.services.client_deletion import ClientDeletionService
 from tunnelui.services.clients import ClientService
 from tunnelui.services.operations import active_operation, operation_output
 from tunnelui.system.provider import SystemOperationError
@@ -130,41 +134,20 @@ def delete_client(client_id: str, revision: int = Query(ge=1),
     ClientService(db, identity.username).remove(client_id, revision)
 
 
+@router.post("/clients/{client_id}/delete")
+def delete_client_with_access(client_id: str, data: ClientDelete, request: Request,
+                              identity=Depends(admin)):
+    return ClientDeletionService(
+        management(request).coordinator, identity.username
+    ).delete(client_id, data.revision, data.idempotency_key)
+
+
 @router.put("/clients/{client_id}/access")
 def client_access(client_id: str, data: ClientAccess, request: Request,
-                  identity=Depends(admin), db=Depends(db_session)):
-    runtime = management(request)
-    client = db.get(Client, client_id)
-    if not client:
-        raise DomainError("client_not_found", 404)
-    if client.revision != data.revision:
-        raise DomainError("revision_conflict")
-    previous = client.enabled
-    client.enabled = data.enabled
-    client.revision += 1
-    client.updated_at = now()
-    rows = db.scalars(select(Attachment).where(Attachment.client_id == client_id)).all()
-    inbound_ids = sorted({row.inbound_id for row in rows})
-    for row in rows:
-        if row.desired_state == "active":
-            row.sync_state = "pending"
-    try:
-        for inbound_id in inbound_ids:
-            runtime.coordinator._render(db, inbound_id)
-    except DomainError:
-        client.enabled = previous
-        db.rollback()
-        raise
-    record(db, identity.username,
-           "client.edit" if data.enabled else "client.disable", "client", client_id)
-    db.commit()
-    operations = []
-    for index, inbound_id in enumerate(inbound_ids):
-        operations.append(runtime.coordinator.apply(
-            inbound_id, f"{data.idempotency_key}-{index}", identity.username,
-            "client_access",
-        ))
-    return {"client_id": client_id, "enabled": data.enabled, "operations": operations}
+                  identity=Depends(admin)):
+    return ClientAccessService(
+        management(request).coordinator, identity.username
+    ).change(client_id, data.enabled, data.revision, data.idempotency_key)
 
 
 @router.get("/inbounds")
@@ -257,6 +240,8 @@ def inbound_detail(inbound_id: str, request: Request, _=Depends(admin), db=Depen
             "sync_state": attachment.sync_state, "revision": attachment.revision,
             "max_http2_conns": attachment.max_http2_conns,
             "max_http3_conns": attachment.max_http3_conns,
+            "applied_max_http2_conns": attachment.applied_max_http2_conns,
+            "applied_max_http3_conns": attachment.applied_max_http3_conns,
         } for attachment, client in attachments],
         "operations": [operation_output(item) for item in operations],
     }
@@ -301,7 +286,12 @@ def update_attachment(attachment_id: str, data: AttachmentState, request: Reques
     runtime = management(request)
     operation = AttachmentService(
         db, identity.username, runtime.coordinator.box, runtime.coordinator
-    ).set_enabled(attachment_id, data.enabled, data.revision, data.idempotency_key)
+    ).set_enabled(
+        attachment_id, data.enabled, data.revision, data.idempotency_key,
+        {name: getattr(data, name) for name in (
+            "max_http2_conns", "max_http3_conns"
+        ) if name in data.model_fields_set},
+    )
     return {"operation": operation}
 
 
@@ -320,9 +310,25 @@ def check_drift(inbound_id: str, request: Request, _=Depends(admin)):
     return management(request).coordinator.check_drift(inbound_id)
 
 
-@router.post("/inbounds/{inbound_id}/cancel-pending", status_code=204)
-def cancel_pending(inbound_id: str, request: Request, _=Depends(admin)):
-    management(request).coordinator.cancel_pending(inbound_id)
+@router.get("/inbounds/{inbound_id}/pending")
+def pending_changes(inbound_id: str, request: Request, _=Depends(admin)):
+    return management(request).coordinator.pending_preview(inbound_id)
+
+
+@router.post("/inbounds/{inbound_id}/apply-pending")
+def apply_pending(inbound_id: str, data: IdempotentAction, request: Request,
+                  identity=Depends(admin)):
+    return {"operation": management(request).coordinator.apply_pending(
+        inbound_id, data.idempotency_key, identity.username
+    )}
+
+
+@router.post("/inbounds/{inbound_id}/cancel-pending")
+def cancel_pending(inbound_id: str, data: PendingCancel, request: Request,
+                   identity=Depends(admin)):
+    return management(request).coordinator.cancel_pending(
+        inbound_id, data.fingerprint, identity.username
+    )
 
 
 @router.post("/inbounds/{inbound_id}/reimport")

@@ -1,4 +1,6 @@
+import base64
 import hashlib
+import hmac
 import os
 from pathlib import Path
 
@@ -27,12 +29,19 @@ class SecretBox:
         if os.name == "posix" and key_file.stat().st_mode & 0o077:
             raise ValueError("master key permissions must be 0600")
         self._fernet = Fernet(key_file.read_bytes().strip())
+        self._intent_key = hmac.digest(
+            base64.urlsafe_b64decode(key_file.read_bytes().strip()),
+            b"tunnelui-attachment-intent-v1", "sha256",
+        )
 
     def encrypt(self, value: str) -> str:
         return self._fernet.encrypt(value.encode()).decode()
 
     def decrypt(self, value: str) -> str:
         return self._fernet.decrypt(value.encode()).decode()
+
+    def intent_fingerprint(self, value: bytes) -> str:
+        return hmac.new(self._intent_key, value, "sha256").hexdigest()
 
 
 def create_key(path: Path) -> None:
