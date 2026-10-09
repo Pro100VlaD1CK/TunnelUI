@@ -103,17 +103,74 @@ test('Phase 2 sandbox: adoption, apply, profile, drift, rollback and recovery', 
   await page.getByRole('button', { name: /Скачать TOML$/ }).click();
   expect((await downloadPromise).suggestedFilename()).toBe('sandbox-bob.toml');
 
+  await page.getByRole('link', { name: 'Клиенты', exact: true }).click();
+  await page.getByRole('button', { name: 'Действия: sandbox-bob' }).click();
+  await page.getByRole('menuitem', { name: 'Удалить', exact: true }).click();
+  const deletion = page.getByRole('dialog', { name: /Удалить клиента «Bob sandbox»/ });
+  await expect(deletion).toContainText('Будет отозван доступ');
+  await deletion.getByRole('button', { name: 'Удалить', exact: true }).click();
+  await expect(page.getByRole('cell', { name: 'sandbox-bob', exact: true })).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Добавить клиента' }).click();
+  const globalEditor = page.getByRole('dialog', { name: 'Новый клиент' });
+  await globalEditor.getByLabel('Username', { exact: true }).fill('sandbox-later');
+  await globalEditor.getByLabel('Отображаемое имя').fill('Later sandbox');
+  await globalEditor.getByRole('button', { name: 'Сохранить', exact: true }).click();
+  await expect(globalEditor).toBeHidden();
+  await page.getByRole('button', { name: 'Действия: sandbox-later' }).click();
+  await page.getByRole('menuitem', { name: 'Добавить доступ' }).click();
+  const attachmentEditor = page.getByRole('dialog', { name: /Добавить доступ · sandbox-later/ });
+  await attachmentEditor.getByRole('combobox').click();
+  await page.locator('.ant-select-dropdown:visible .ant-select-item-option-content').filter({ hasText: 'TrustTunnel' }).click();
+  await attachmentEditor.getByRole('button', { name: 'Сгенерировать пароль' }).click();
+  await attachmentEditor.getByRole('button', { name: 'Добавить и применить' }).click();
+  await expect(attachmentEditor).toBeHidden();
+  await page.getByRole('button', { name: 'Действия: sandbox-later' }).click();
+  await page.getByRole('menuitem', { name: 'Ограничения · TrustTunnel' }).click();
+  const limitsEditor = page.getByRole('dialog', { name: 'Ограничения · TrustTunnel' });
+  await limitsEditor.getByLabel('HTTP/2 connections').fill('4');
+  await limitsEditor.getByRole('button', { name: 'Сохранить и применить' }).click();
+  await expect(limitsEditor).toBeHidden();
+
   let response = await page.request.post('/api/dev/fake-scenario', { headers, data: { scenario: 'drift' } });
   expect(response.status()).toBe(204);
+  await page.getByRole('button', { name: 'Действия: sandbox-later' }).click();
+  await page.getByRole('menuitem', { name: 'Отключить доступ · TrustTunnel' }).click();
+  accessDialog = page.getByRole('dialog', { name: /Отключить доступ/ });
+  await accessDialog.getByRole('button', { name: 'Изменить и применить' }).click();
+  await expect(accessDialog.getByRole('alert').filter({ hasText: 'внешние изменения' })).toBeVisible();
+  await accessDialog.getByRole('button', { name: 'Отмена' }).click();
   await page.getByRole('link', { name: 'Входящие', exact: true }).click();
   await page.getByRole('button', { name: 'Действия: TrustTunnel' }).click();
   await page.getByRole('menuitem', { name: 'Просмотреть' }).click();
   const detail = page.getByRole('dialog', { name: 'TrustTunnel' });
   await detail.getByRole('button', { name: 'Проверить изменения' }).click();
   await expect(detail.getByText('Обнаружены внешние изменения')).toBeVisible();
+  await expect(detail.getByText('Ожидают применения: sandbox-later')).toHaveCount(0);
   await detail.getByRole('button', { name: 'Импортировать изменения' }).click();
   await page.getByRole('dialog', { name: 'Импортировать внешнее состояние?' }).getByRole('button', { name: 'Подтвердить' }).click();
   await expect(detail.getByText('Обнаружены внешние изменения')).not.toBeVisible();
+  await detail.locator('.ant-drawer-close').click();
+
+  response = await page.request.post('/api/dev/fake-scenario', { headers, data: { scenario: 'health_failure_rollback_success' } });
+  expect(response.status()).toBe(204);
+  await page.getByRole('link', { name: 'Клиенты', exact: true }).click();
+  await page.getByRole('button', { name: 'Действия: sandbox-later' }).click();
+  await page.getByRole('menuitem', { name: 'Отключить доступ · TrustTunnel' }).click();
+  accessDialog = page.getByRole('dialog', { name: /Отключить доступ/ });
+  await accessDialog.getByRole('button', { name: 'Изменить и применить' }).click();
+  await expect(accessDialog.getByRole('alert').filter({ hasText: 'Применение не подтверждено' })).toBeVisible();
+  await accessDialog.getByRole('button', { name: 'Отмена' }).click();
+  await page.getByRole('link', { name: 'Входящие', exact: true }).click();
+  await page.getByRole('button', { name: 'Действия: TrustTunnel' }).click();
+  await page.getByRole('menuitem', { name: 'Просмотреть' }).click();
+  await expect(detail.getByText('Ожидают применения: sandbox-later')).toBeVisible();
+  await detail.getByRole('button', { name: 'Просмотреть и отменить ожидающие' }).click();
+  const cancelPending = page.getByRole('dialog', { name: 'Отменить ожидающие изменения?' });
+  await expect(cancelPending).toContainText('sandbox-later');
+  await cancelPending.getByRole('button', { name: 'Отменить перечисленные' }).click();
+  await expect(cancelPending).toBeHidden();
+  await expect(detail.getByText('Ожидают применения: sandbox-later')).toHaveCount(0);
   await detail.locator('.ant-drawer-close').click();
 
   response = await page.request.post('/api/dev/fake-scenario', { headers, data: { scenario: 'health_failure_rollback_success' } });
@@ -133,10 +190,21 @@ test('Phase 2 sandbox: adoption, apply, profile, drift, rollback and recovery', 
   await expect(failedApply).not.toBeVisible();
   await page.getByRole('dialog', { name: 'Новый клиент' }).locator('.ant-drawer-close').click();
 
+  const rollbackClients = await page.request.get('/api/clients?limit=100');
+  const rollbackClient = (await rollbackClients.json()).items.find((item: { username: string }) => item.username === 'sandbox-rollback');
+  expect(rollbackClient.attachments[0].sync_state).not.toBe('active');
+  await page.getByRole('link', { name: 'Входящие', exact: true }).click();
+  await page.getByRole('button', { name: 'Действия: TrustTunnel' }).click();
+  await page.getByRole('menuitem', { name: 'Просмотреть' }).click();
+  await expect(detail.getByText('Ожидают применения: sandbox-rollback')).toBeVisible();
+  await detail.getByRole('button', { name: 'Просмотреть и отменить ожидающие' }).click();
+  const cancelRollback = page.getByRole('dialog', { name: 'Отменить ожидающие изменения?' });
+  await cancelRollback.getByRole('button', { name: 'Отменить перечисленные' }).click();
+  await expect(cancelRollback).toBeHidden();
+  await detail.locator('.ant-drawer-close').click();
+
   response = await page.request.post('/api/dev/fake-scenario', { headers, data: { scenario: 'rollback_failure' } });
   expect(response.status()).toBe(204);
-  const clients = await page.request.get('/api/clients?limit=100');
-  const rollbackClient = (await clients.json()).items.find((item: { username: string }) => item.username === 'sandbox-rollback');
   const inbound = (await (await page.request.get('/api/inbounds')).json()).items[0];
   const recoveryClient = await page.request.post('/api/clients', { headers, data: {
     username: 'sandbox-recovery', display_name: 'Recovery sandbox', enabled: true,
@@ -148,11 +216,12 @@ test('Phase 2 sandbox: adoption, apply, profile, drift, rollback and recovery', 
   } });
   expect(response.status()).toBe(201);
   expect((await response.json()).operation.state).toBe('needs_recovery');
-  expect(rollbackClient.attachments[0].sync_state).not.toBe('active');
   await page.getByRole('link', { name: 'Входящие', exact: true }).click();
   await page.getByRole('button', { name: 'Действия: TrustTunnel' }).click();
   await page.getByRole('menuitem', { name: 'Просмотреть' }).click();
   await expect(detail.getByRole('alert').filter({ hasText: 'Требуется восстановление' })).toBeVisible();
+  await expect(detail.getByRole('button', { name: 'Применить ожидающие' })).toBeDisabled();
+  await expect(detail.getByRole('button', { name: 'Просмотреть и отменить ожидающие' })).toBeDisabled();
   for (const width of [320, 375, 390, 768]) {
     await expectNoPageOverflow(page, width);
     await expect(detail).toBeVisible();
