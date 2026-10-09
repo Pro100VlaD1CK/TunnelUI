@@ -27,7 +27,7 @@ fail closed с 503; скрытого fake fallback нет. Linux adoption уже
 
 ## Компоненты
 - `backend/src/tunnelui`: API, domain, services, repositories, integrations, system adapters.
-- `backend/migrations`: Alembic 0001 и 0002; схема не создаётся через `create_all`.
+- `backend/migrations`: Alembic 0001–0003; схема не создаётся через `create_all`.
 - `backend/tests`: temp directories, fakes и mocks; реальный systemd не вызывается.
 - `frontend/src`: app shell, shared API/types и features auth/inbounds/clients/profiles/audit/settings.
 - `frontend/e2e`: Chromium-пути Phase 1/2, recovery, mobile и accessibility smoke checks.
@@ -38,7 +38,8 @@ fail closed с 503; скрытого fake fallback нет. Linux adoption уже
   конфигурацию staging нужно сверять отдельно, примеры не считать её копией.
 
 ## Модель данных
-`Admin`, `AdminSession`, `Client`, `Inbound`, `Attachment`, `Operation`, `AuditEvent`.
+`Admin`, `AdminSession`, `Client`, `Inbound`, `Attachment`, `Operation`, `AuditEvent`,
+`AttachmentIntent`, `ClientAccessIntent`, `ClientDeletion`.
 Client глобален; credential и connection limits принадлежат attachment. Attachment
 хранит encrypted password, desired/applied/sync state и revision. Operation хранит
 kind, state, idempotency key, request fingerprint, ожидаемые/результирующие hashes,
@@ -49,6 +50,9 @@ API token или private key. AuditEvent — отдельная сущность
 `pending → preparing → backed_up → writing → applying → checking → succeeded`;
 ошибка после записи проходит `rolling_back → rolled_back`, а неподтверждённый rollback
 заканчивается `needs_recovery`. До записи возможен `failed`.
+Миграция 0003 добавляет secret-free idempotency intents, replay удалений и снимок
+фактически применённых HTTP/2/3 limits и глобального enabled для каждого attachment.
+Intents не содержат credential, plaintext config или deep-link.
 
 ## TrustTunnel integration
 Проверен официальный tag v1.1.0, commit `fab5b8353a19332f935fa30869307d37d4a898d1`.
@@ -128,7 +132,18 @@ TunnelUI HTTPS TCP 9443. Web работает как `tunnelui`, агент — 
   AuditEvent, drift, rollback, `needs_recovery` и recover, last-active-client guard,
   concurrent apply guard, Profiles и inbound-specific fake QR/deep-link/TOML export.
 - Attached client разрешает безопасное изменение display name/comment; username,
-  expiry и global enabled требуют отдельного apply workflow и пока заблокированы.
+  expiry заблокированы до отдельного apply workflow. Глобальное enabled теперь меняется
+  через idempotent per-inbound apply; частичный результат явно возвращается оператору.
+- Клиента с attachments можно полностью удалить одним подтверждением: сначала
+  preflight каждого inbound, затем последовательный apply и проверка фактических
+  credentials/hashes, и только после этого удаление DB-записи. Частичный отказ
+  сохраняет запись и доступные Operation; повтор с новым key продолжает после
+  устранения причины. Отвязка одного inbound остаётся отдельным действием.
+- Создание/изменение attachment и global access отклоняют заранее известный drift
+  или чужой pending до изменения desired state. При гонке после preflight pending
+  виден в UI; preview с fingerprint позволяет явную отмену или apply-pending.
+  Для глобального доступа preview показывает все затронутые inbounds; отмена в одном
+  может создать pending в другом, которое нужно применить отдельно.
 - Sandbox API недоступен без explicit development configuration; это покрыто тестом.
 - UI показывает service/config/recovery state, операции, attachments и прямой переход
   к inbound после partial apply; внутренние state labels локализованы.
@@ -145,17 +160,16 @@ TunnelUI HTTPS TCP 9443. Web работает как `tunnelui`, агент — 
   regression-тесты проверяют повтор confirm, agent failure, drift, metadata refresh.
 
 ## Сейчас в работе
-Текущий проход завершает Linux adoption, drift/metadata safety и TrustTunnel-only
-scope локально, без VPS/SSH/deployment. Phase 2 coordinator и Operation journal
-сохранены. GitHub Actions Linux выявил transient horizontal overflow после смены
-desktop viewport на mobile при открытом Ant Design Drawer. Исправление ограничивает
-анимацию Drawer transform/shadow и даёт таблицам деталей собственный horizontal scroll.
-Текущий локальный Windows прогон frontend: TypeScript pass, Vitest 3 passed,
-Vite build pass, Playwright 6 passed, включая `needs_recovery` Drawer на
-320/375/390/768 px. Flaky переход duplicate → edit в клиентском Drawer устранён:
-каждое открытие получает отдельную React session, тест ждёт полного закрытия и
-использует локаторы внутри нужного dialog. Проблемный сценарий прошёл 5 отдельных
-запусков; повторный Linux CI и staging acceptance ещё не выполнялись.
+Текущий локальный проход доводит жизненный цикл клиента: полное удаление с отзывом
+доступа, настройку attachment limits, idempotent global access, выход из drift/pending
+через UI и regression-тесты. Linux Agent и его привилегии не менялись; текущие
+изменения не запускались на Debian staging. Существующий coordinator, journal и
+recovery сохранены.
+На Windows локально: Ruff pass; pytest 127 passed, 12 Linux-only skipped,
+1 upstream Starlette/httpx warning; TypeScript и Vite build pass; Vitest 3 passed;
+Playwright 6 passed. Финальный E2E запускался после сборки и проверил pending,
+drift, rollback/recovery и mobile 320/375/390/768. Linux CI/staging для этого diff
+ещё не запускались.
 
 ## Следующие задачи
 1. Завершить оставшийся Phase 2 product scope: durable expiry scheduler/jobs и
@@ -171,7 +185,12 @@ Vite build pass, Playwright 6 passed, включая `needs_recovery` Drawer н�
   владельца, проверены на отдельном Debian staging до текущих изменений.
 - Sandbox locks in-process; Linux agent использует flock per managed ID. Global client
   access по нескольким inbound выполняется
-  последовательно, без общей атомарной транзакции и cross-inbound recovery.
+  последовательно, без общей атомарной транзакции. При частичном результате DB-клиент
+  сохраняется; UI показывает per-inbound результат, предлагает apply/cancel pending.
+  Это операторский recovery workflow, не автоматический cross-inbound rollback.
+- Полное удаление также последовательно применяет несколько inbounds: если часть уже
+  отозвана, а другая не подтвердилась, клиент не удаляется. Для продолжения нужен
+  новый idempotency key после разрешения ошибки; автоматической атомарности нет.
 - Expiry учитывается renderer, но автоматического durable scheduler/revoke пока нет.
 - Username/expiry attached client нельзя менять через текущий UI; metadata можно.
 - Пустой `credentials.toml` не поддерживается TrustTunnel v1.1.0, поэтому последний
@@ -230,6 +249,13 @@ Vite build pass, Playwright 6 passed, включая `needs_recovery` Drawer н�
   внешнее состояние требует recovery без перезаписи. После health apply/rollback
   повторно проверяют фактические hashes до объявления успеха. Неизвестный результат ответа
   после rename по-прежнему обрабатывается через существующий rollback/recovery journal.
+- ADR-016 active (2026-10-09): client/attachment mutations записывают secret-free
+  intent до apply и используют отдельные per-inbound Operation keys. Известный drift
+  и чужой pending отклоняются до desired commit; результат `succeeded` требует
+  проверенных файлов и health. Полное удаление клиента — последовательный revoke
+  с проверкой всех затронутых inbounds до удаления DB-строки, а не CASCADE delete.
+  Отмена pending привязана к preview fingerprint и показывает влияние глобального
+  enabled на другие inbounds. ADR-004/010 остаются действующими.
 Изменённые решения помечаются superseded и дополняются заменой, история не стирается.
 
 ## Deployment notes
@@ -239,10 +265,13 @@ sandbox configuration. По сообщению владельца, предыд�
 Примерный web unit — `User=tunnelui`; socket root:tunnelui 0660, agent root с
 ограниченным registry/paths и typed operation IDs. Панель не занимает 443.
 DB backup и master-key backup хранятся раздельно. `docs/DEPLOYMENT.md` содержит
-примерные units и повторный staging gate для текущего diff, а не разрешение на
-production install.
+примерные units, процедуру подготовки immutable release и повторный staging gate
+для текущего diff, а не разрешение на production install.
 
 ## Changelog
+- 2026-10-09: client lifecycle: safe multi-inbound revoke/delete, attachment limits,
+  global access intents, preflight drift/pending, compare-and-cancel preview и
+  UI-пути восстановления. Миграция 0003; Linux/VPS не затронуты.
 - 2026-10-01: Phase 0, version-pinned research, архитектура, документы и project-local Impeccable.
 - 2026-10-01: Phase 1 и offline core Phase 2; базовые frontend/backend tests.
 - 2026-10-02: UX hardening, полный baseline прогон и документация.

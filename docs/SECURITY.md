@@ -28,6 +28,14 @@ root-owned registry capabilities и socket peer UID. По сообщению в�
 SQL injection закрывается SQLAlchemy bind parameters; race edits — revision CAS;
 duplicate usernames — DB uniqueness. Для client с attachments metadata edit разрешён,
 а username/expiry/global enabled идут только через apply-aware paths; delete fail closed.
+Для attachment и global access idempotency intent записывается до внешнего эффекта;
+пароль входит только в keyed HMAC fingerprint, вычисленный из master key, а не в
+plaintext/salted-guessable digest. ClientDeletion, Operation и AuditEvent хранят
+только IDs, hashes, безопасные коды и результат. Удаление DB client запрещено,
+пока хотя бы один управляемый inbound не подтвердил отсутствие credential.
+Drift/pending preflight предотвращает случайное совместное применение чужих
+изменений. Отмена pending требует актуального preview fingerprint, учитывает другие
+inbounds глобального клиента и не меняет managed файлы.
 Секретный master key и DB вместе позволяют decrypt; защищать отдельно и backup
 раздельно. Privileged endpoint binary экспортирует секретный stdout — не логировать.
 
@@ -86,8 +94,8 @@ tmpfiles заранее создаёт root-owned runtime/backup каталог�
 - Ограничение размера request до парсинга на reverse proxy, shared rate limit при
   масштабировании, безопасная доверенная proxy policy, HTTPS и firewall.
 - Протокол key rotation/recovery и backup retention; tamper resistance audit.
-- Expiry durable scheduler и visible failed jobs; attachment apply UI уже есть,
-  credential-affecting edit существующего attachment пока ограничен.
+- Expiry durable scheduler и visible failed jobs; attachment limit edit и apply UI
+  есть, password rotation и изменение username/expiry ещё требуют отдельного workflow.
 - Dependency vulnerability audit и staging acceptance на Debian 12.
 
 Нельзя считать это production hardening certificate. В текущем проходе доступ к
