@@ -152,7 +152,10 @@ desktop viewport на mobile при открытом Ant Design Drawer. Испр
 анимацию Drawer transform/shadow и даёт таблицам деталей собственный horizontal scroll.
 Текущий локальный Windows прогон frontend: TypeScript pass, Vitest 3 passed,
 Vite build pass, Playwright 6 passed, включая `needs_recovery` Drawer на
-320/375/390/768 px. Повторный Linux CI и staging acceptance ещё не выполнялись.
+320/375/390/768 px. Flaky переход duplicate → edit в клиентском Drawer устранён:
+каждое открытие получает отдельную React session, тест ждёт полного закрытия и
+использует локаторы внутри нужного dialog. Проблемный сценарий прошёл 5 отдельных
+запусков; повторный Linux CI и staging acceptance ещё не выполнялись.
 
 ## Следующие задачи
 1. Завершить оставшийся Phase 2 product scope: durable expiry scheduler/jobs и
@@ -180,7 +183,7 @@ Vite build pass, Playwright 6 passed, включая `needs_recovery` Drawer н�
 - Нет metrics/runtime traffic, rules editor, certificate management и backup retention.
 - Vite сообщает о крупном eager Ant Design chunk (~1.23 MB raw); route splitting отложен.
 - Backend TestClient сообщает upstream deprecation warning Starlette/httpx.
-- Impeccable skill 4.3.1 имеет доступное обновление 4.5.0; оно не устанавливалось.
+- Impeccable skill 4.3.1 имеет доступное обновление 4.5.1; оно не устанавливалось.
 - Impeccable 4.3.1 генерирует Windows `commandWindows` для cmd.exe, а Codex 0.159
   выполняет его через активный PowerShell. `.codex/impeccable-hook.cmd` задаёт явную
   cmd.exe-границу, передаёт stdin и сохраняет exit code. После update повторно проверить
@@ -259,3 +262,7 @@ production install.
   ширина Drawer больше не анимируется через `transition: all`, вложенные таблицы
   прокручиваются внутри себя; Playwright проверяет 320/375/390/768 px и сохраняет
   геометрию нарушителей в тексте assertion при регрессии.
+- 2026-10-09: устранена гонка повторного открытия формы клиента после duplicate:
+  Drawer получает новую React session, E2E ждёт закрытия и ограничивает локаторы
+  активным dialog. Linux CI при E2E failure сохраняет trace, screenshot,
+  error-context и безопасную геометрию Drawer на 7 дней.

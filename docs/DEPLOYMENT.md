@@ -56,6 +56,8 @@ E2E использует установленный Chrome (Playwright channel c
 после тестов. При аварийном завершении Windows disposable temp directory может
 остаться: .runtime исключён из Git. Ни systemd, ни network integrations не нужны.
 Screenshots: frontend/test-results (gitignored). Тестовые данные синтетические.
+При падении E2E Linux CI загружает только этот каталог с trace, screenshot,
+error-context и безопасной геометрией Drawer; retention — 7 дней.
 Linux CI устанавливает Chrome через Playwright; это не часть production packaging.
 
 ## Impeccable

@@ -77,7 +77,7 @@ export function ClientEditor({ open, client, close }: { open: boolean; client?: 
     else mutation.mutate(values);
   };
   return <>
-    <Drawer title={client ? 'Редактировать клиента' : 'Новый клиент'} open={open} onClose={() => { if (!mutation.isPending) close(); }} size={480} className="client-drawer" destroyOnHidden>
+    <Drawer title={client ? 'Редактировать клиента' : 'Новый клиент'} open={open} onClose={() => { if (!mutation.isPending) close(); }} size={480} className="client-drawer">
       <Alert type="info" title={client ? 'Глобальная запись клиента' : 'Клиент и доступ'} description={client ? (attached ? 'Имя и комментарий можно изменить сразу. Username и срок заблокированы, пока есть привязки: для них нужен отдельный безопасный workflow применения.' : 'Изменения этой записи не затрагивают конфигурацию TrustTunnel.') : 'Можно создать только глобальную запись либо сразу привязать её к управляемому TrustTunnel и применить конфигурацию.'} />
       {mutation.error && !confirmation && <Alert role="alert" type="error" showIcon title={errorText(mutation.error)} />}
       {mutation.error instanceof ApiError && mutation.error.code === 'revision_conflict' && <Button onClick={() => { cache.invalidateQueries({ queryKey: ['clients'] }); close(); }}>Закрыть без сохранения и обновить список</Button>}
