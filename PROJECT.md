@@ -1,6 +1,6 @@
 # TunnelUI
 
-Главный технический документ. Состояние на 2026-10-08. Product context — `PRODUCT.md`,
+Главный технический документ. Состояние на 2026-10-09. Product context — `PRODUCT.md`,
 визуальная система — `DESIGN.md`. В этом проходе Codex работает только с локальными
 исходниками; приведённые ниже Debian staging результаты сообщил владелец проекта.
 
@@ -147,10 +147,12 @@ TunnelUI HTTPS TCP 9443. Web работает как `tunnelui`, агент — 
 ## Сейчас в работе
 Текущий проход завершает Linux adoption, drift/metadata safety и TrustTunnel-only
 scope локально, без VPS/SSH/deployment. Phase 2 coordinator и Operation journal
-сохранены. Текущий локальный Windows прогон: Ruff pass, pytest **113 passed,
-12 Linux-only skipped**, 1 upstream warning; TypeScript pass, Vitest 3 passed,
-Vite build pass, Playwright 6 passed. Linux CI и повторный staging acceptance
-текущего diff ещё не выполнялись.
+сохранены. GitHub Actions Linux выявил transient horizontal overflow после смены
+desktop viewport на mobile при открытом Ant Design Drawer. Исправление ограничивает
+анимацию Drawer transform/shadow и даёт таблицам деталей собственный horizontal scroll.
+Текущий локальный Windows прогон frontend: TypeScript pass, Vitest 3 passed,
+Vite build pass, Playwright 6 passed, включая `needs_recovery` Drawer на
+320/375/390/768 px. Повторный Linux CI и staging acceptance ещё не выполнялись.
 
 ## Следующие задачи
 1. Завершить оставшийся Phase 2 product scope: durable expiry scheduler/jobs и
@@ -253,3 +255,7 @@ production install.
   staging проверку; текущий локальный проход усилил drift/re-import/metadata и
   поправил Linux UI. Продуктовый scope сужен до TrustTunnel, старые интеграционные
   планы помечены superseded; production/VPS этим проходом не затронуты.
+- 2026-10-09: устранено Linux-only mobile overflow в деталях inbound: responsive
+  ширина Drawer больше не анимируется через `transition: all`, вложенные таблицы
+  прокручиваются внутри себя; Playwright проверяет 320/375/390/768 px и сохраняет
+  геометрию нарушителей в тексте assertion при регрессии.

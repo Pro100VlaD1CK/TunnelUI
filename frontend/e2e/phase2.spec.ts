@@ -1,5 +1,42 @@
 import { expect, test, type Page } from '@playwright/test';
 
+async function overflowGeometry(page: Page) {
+  return page.evaluate(() => ({
+    viewportWidth: window.innerWidth,
+    documentWidth: document.documentElement.scrollWidth,
+    offenders: [...document.querySelectorAll<HTMLElement>('body *')].map(element => {
+      const rect = element.getBoundingClientRect();
+      let ancestor = element.parentElement;
+      let contained = false;
+      while (ancestor && ancestor !== document.body) {
+        const overflow = getComputedStyle(ancestor).overflowX;
+        if (['auto', 'scroll', 'hidden', 'clip'].includes(overflow)) {
+          contained = true;
+          break;
+        }
+        ancestor = ancestor.parentElement;
+      }
+      return {
+        tag: element.tagName.toLowerCase(),
+        className: typeof element.className === 'string' ? element.className : '',
+        left: Math.round(rect.left), right: Math.round(rect.right), width: Math.round(rect.width),
+        contained,
+      };
+    }).filter(item => !item.contained && (item.right > window.innerWidth + 1 || item.left < -1))
+      .sort((left, right) => right.right - left.right).slice(0, 12),
+  }));
+}
+
+async function expectNoPageOverflow(page: Page, width: number) {
+  await page.setViewportSize({ width, height: 844 });
+  await expect.poll(
+    () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth),
+    { message: `Страница не должна переполнять viewport ${width}px` },
+  ).toBeLessThanOrEqual(0);
+  const geometry = await overflowGeometry(page);
+  expect(geometry.documentWidth, JSON.stringify(geometry, null, 2)).toBeLessThanOrEqual(geometry.viewportWidth);
+}
+
 async function login(page: Page) {
   await page.goto('/');
   await page.getByLabel('Имя администратора').fill('test-admin');
@@ -115,8 +152,23 @@ test('Phase 2 sandbox: adoption, apply, profile, drift, rollback and recovery', 
   await page.getByRole('link', { name: 'Входящие', exact: true }).click();
   await page.getByRole('button', { name: 'Действия: TrustTunnel' }).click();
   await page.getByRole('menuitem', { name: 'Просмотреть' }).click();
-  await expect(page.getByRole('dialog', { name: 'TrustTunnel' }).getByRole('alert').filter({ hasText: 'Требуется восстановление' })).toBeVisible();
-  await page.setViewportSize({ width: 390, height: 844 });
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await expect(detail.getByRole('alert').filter({ hasText: 'Требуется восстановление' })).toBeVisible();
+  for (const width of [320, 375, 390, 768]) {
+    await expectNoPageOverflow(page, width);
+    await expect(detail).toBeVisible();
+    await expect(detail.getByRole('alert').filter({ hasText: 'Требуется восстановление' })).toBeVisible();
+    if (width === 320) {
+      const tableScroll = await detail.locator('.ant-table-content').evaluateAll(elements =>
+        elements.map(element => ({
+          clientWidth: element.clientWidth,
+          scrollWidth: element.scrollWidth,
+          overflowX: getComputedStyle(element).overflowX,
+        })),
+      );
+      expect(tableScroll).toHaveLength(2);
+      expect(tableScroll.every(item => item.overflowX === 'auto' && item.scrollWidth > item.clientWidth)).toBe(true);
+    }
+  }
+  await expectNoPageOverflow(page, 390);
   await page.screenshot({ path: 'test-results/phase2-sandbox.png', fullPage: true, animations: 'disabled' });
 });

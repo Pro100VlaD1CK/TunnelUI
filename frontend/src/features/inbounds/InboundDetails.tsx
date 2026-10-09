@@ -36,7 +36,7 @@ export function InboundDetails({ inboundId, close, changed }: { inboundId?: stri
   }, onSuccess: () => { cache.invalidateQueries({ queryKey: ['inbound', inboundId] }); cache.invalidateQueries({ queryKey: ['inbounds'] }); changed(); message.success('Состояние обновлено'); } });
   const confirm = (title: string, description: string, path: string, body?: unknown, method = 'POST') => modal.confirm({ title, content: description, okText: 'Подтвердить', cancelText: 'Отмена', okButtonProps: { danger: title.includes('Удалить') }, onOk: async () => { await action.mutateAsync({ path, method, body }); } });
   const recoverable = query.data?.operations.find(item => item.state === 'needs_recovery');
-  return <Drawer title={query.data?.name ?? 'Входящее'} open={Boolean(inboundId)} onClose={close} size={760} destroyOnHidden>
+  return <Drawer title={query.data?.name ?? 'Входящее'} open={Boolean(inboundId)} onClose={close} size={760} rootClassName="inbound-details-drawer" destroyOnHidden>
     <QueryState loading={query.isPending} error={query.error} retry={() => query.refetch()} />
     {action.error && <Alert type="error" showIcon title={errorText(action.error)} />}
     {query.data && <>
@@ -52,17 +52,17 @@ export function InboundDetails({ inboundId, close, changed }: { inboundId?: stri
       ]} />
       <div className="section-heading"><Typography.Title level={2}>Действия</Typography.Title><Space wrap><Button onClick={() => action.mutate({ path: `/inbounds/${inboundId}/drift` })} loading={action.isPending}>Проверить изменения</Button><Button disabled={!query.data.enabled || query.data.execution_mode === 'unavailable'} onClick={() => confirm(query.data.execution_mode === 'sandbox' ? 'Перезапустить тестовый сервис?' : 'Перезапустить службу TrustTunnel?', query.data.execution_mode === 'sandbox' ? 'Будут выполнены тестовые перезапуск и проверка здоровья. Файлы не меняются.' : 'Агент перезапустит выбранную службу TrustTunnel через systemd и проверит её состояние. Файлы не меняются.', `/inbounds/${inboundId}/restart`, { idempotency_key: crypto.randomUUID() })}>{query.data.execution_mode === 'sandbox' ? 'Перезапустить (тест)' : 'Перезапустить службу'}</Button><Button danger onClick={() => confirm('Удалить из управления?', 'Запись станет доступна только для чтения. Файлы TrustTunnel не удаляются и не изменяются.', `/inbounds/${inboundId}/management`, undefined, 'DELETE')}>Удалить из управления</Button></Space></div>
       <div className="section-heading"><Typography.Title level={2}>Клиенты</Typography.Title></div>
-      <Table size="small" rowKey="id" pagination={false} dataSource={query.data.attachments} columns={[
-        { title: 'Username', dataIndex: 'username' }, { title: 'Имя', dataIndex: 'display_name' },
-        { title: 'Желаемое', dataIndex: 'desired_state', render: value => accessLabels[value] ?? value }, { title: 'Применённое', dataIndex: 'applied_state', render: value => accessLabels[value] ?? value },
-        { title: 'Синхронизация', dataIndex: 'sync_state', render: value => <Tag>{syncLabels[value] ?? value}</Tag> },
+      <Table size="small" rowKey="id" pagination={false} scroll={{ x: 700 }} dataSource={query.data.attachments} columns={[
+        { title: 'Username', dataIndex: 'username', width: 150 }, { title: 'Имя', dataIndex: 'display_name', width: 170 },
+        { title: 'Желаемое', dataIndex: 'desired_state', width: 115, render: value => accessLabels[value] ?? value }, { title: 'Применённое', dataIndex: 'applied_state', width: 125, render: value => accessLabels[value] ?? value },
+        { title: 'Синхронизация', dataIndex: 'sync_state', width: 140, render: value => <Tag>{syncLabels[value] ?? value}</Tag> },
       ]} />
       <div className="section-heading"><Typography.Title level={2}>Последние операции</Typography.Title></div>
-      <Table<Operation> size="small" rowKey="id" pagination={false} dataSource={query.data.operations} columns={[
+      <Table<Operation> size="small" rowKey="id" pagination={false} scroll={{ x: 720 }} dataSource={query.data.operations} columns={[
         { title: 'Время', width: 160, render: (_, row) => new Date(row.created_at * 1000).toLocaleString('ru-RU') },
-        { title: 'Операция', dataIndex: 'kind', render: value => operationKinds[value] ?? value },
-        { title: 'Состояние', render: (_, row) => <Tag color={row.state === 'succeeded' ? 'success' : row.state === 'needs_recovery' || row.state === 'failed' ? 'error' : row.state === 'rolled_back' ? 'warning' : 'processing'}>{operationLabels[row.state] ?? row.state}</Tag> },
-        { title: 'Результат', dataIndex: 'error_code', render: value => value ? (errorLabels[value] ?? 'Операция не завершена') : '—' },
+        { title: 'Операция', dataIndex: 'kind', width: 180, render: value => operationKinds[value] ?? value },
+        { title: 'Состояние', width: 175, render: (_, row) => <Tag color={row.state === 'succeeded' ? 'success' : row.state === 'needs_recovery' || row.state === 'failed' ? 'error' : row.state === 'rolled_back' ? 'warning' : 'processing'}>{operationLabels[row.state] ?? row.state}</Tag> },
+        { title: 'Результат', dataIndex: 'error_code', width: 205, render: value => value ? (errorLabels[value] ?? 'Операция не завершена') : '—' },
       ]} />
     </>}
   </Drawer>;
