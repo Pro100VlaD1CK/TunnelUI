@@ -23,6 +23,10 @@ export interface Attachment {
   applied_state: 'active' | 'disabled' | 'pending';
   sync_state: 'active' | 'pending' | 'conflict' | 'error' | 'disabled';
   revision: number;
+  max_http2_conns: number | null;
+  max_http3_conns: number | null;
+  applied_max_http2_conns: number | null;
+  applied_max_http3_conns: number | null;
 }
 
 export interface Operation {
@@ -49,5 +53,6 @@ export interface Inbound {
   client_count: number;
   config_state: 'synced' | 'drift' | 'pending' | 'error' | 'recovery_required' | 'unmanaged';
   service_status: 'running' | 'stopped' | 'unknown';
+  execution_mode: 'sandbox' | 'linux' | 'unavailable';
   operation: Operation | null;
 }

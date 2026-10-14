@@ -56,6 +56,8 @@ E2E использует установленный Chrome (Playwright channel c
 после тестов. При аварийном завершении Windows disposable temp directory может
 остаться: .runtime исключён из Git. Ни systemd, ни network integrations не нужны.
 Screenshots: frontend/test-results (gitignored). Тестовые данные синтетические.
+При падении E2E Linux CI загружает только этот каталог с trace, screenshot,
+error-context и безопасной геометрией Drawer; retention — 7 дней.
 Linux CI устанавливает Chrome через Playwright; это не часть production packaging.
 
 ## Impeccable
@@ -74,8 +76,8 @@ Native engine binary gitignored; launcher при отсутствии может
 `packaging/systemd/` содержит примерные web, agent и socket units;
 `packaging/tmpfiles.d/tunnelui.conf` — runtime/private каталоги;
 `packaging/agent.toml.example` — root-owned managed registry;
-`packaging/tunnelui.env.example` — web environment. Ничего из этого не
-устанавливалось на VPS. Web unit работает как `tunnelui`, слушает только loopback
+`packaging/tunnelui.env.example` — web environment. Это примеры в репозитории,
+а не подтверждённая копия текущих VPS units. Web unit работает как `tunnelui`, слушает только loopback
 8080; agent socket принадлежит root:tunnelui (0660), agent — отдельный root
 process. Публичный HTTPS ingress не входит в этот набор. TCP/UDP 443, TCP 80/22 и
 UDP 51820 не занимаются панелью.
@@ -95,9 +97,49 @@ Sandbox включается отдельно только development configura
 `tunnelui-agent` на Windows отвергается. Не использовать несколько web workers:
 login limiter остаётся process-local.
 
-Перед какой-либо установкой нужен отдельный Debian 12 staging acceptance на
-тестовом endpoint: запустить Linux-only tests/CI, сверить `trusttunnel_endpoint
---version` и `--help`, unit ExecStart/WorkingDirectory, владельцев и mode файлов,
-socket SO_PEERCRED, D-Bus restart job, CLI export, TCP/TLS/QUIC health, drift,
-rollback и `needs_recovery` после сбоев. Linux discovery/adoption и production
-bootstrap/reconciliation ещё не готовы; sample units не делают проект production-ready.
+По сообщению владельца проекта, Debian 12 staging TrustTunnel v1.1.0 на TCP/UDP
+8448 и TunnelUI HTTPS на TCP 9443 уже вручную подтвердили discovery, adoption,
+apply, D-Bus restart/health, rollback, официальный TOML/deeplink, QR и подключение
+iPhone. Production TrustTunnel остаётся на TCP/UDP 443. Эти данные не получены
+текущим запуском Codex и не являются разрешением на deployment.
+
+После текущих изменений нужен повторный staging acceptance на том же отдельном
+экземпляре: Linux CI, registry/unit compatibility, внешний drift, metadata re-import,
+отказ агента, rollback и `needs_recovery`. Не выполнять проверки на production 443.
+Особенно сверить фактические unit ExecStart/WorkingDirectory, owner/mode, socket
+SO_PEERCRED, официальный CLI и health. Sample units не делают ветку production-ready.
+
+## Воспроизводимое обновление отдельного staging release (проект процедуры)
+
+Эта процедура описывает будущий операторский запуск, а не выполнялась Codex. До
+применения сверить реальные unit/override с примерными `packaging/` и проверить
+Linux CI. Не переключать рабочий Git checkout in-place: подготовить новый каталог
+release из конкретного commit SHA рядом с работающим, собрать frontend и установить
+backend/agent из одного SHA. Сохранить manifest SHA, checksums пакета и миграции.
+
+Подготовить файлы с читаемыми для service UID режимами, а не наследовать `umask 077`
+у root Git checkout: parent directories должны иметь traversal для `tunnelui`, код
+быть доступен на чтение, исполняемые файлы — на исполнение. Проверить это именно
+запуском import/read-only smoke от `tunnelui`, включая `PYTHONPATH`, static dir и
+`.venv`; не менять режимы master key, DB или private TLS key по общему правилу для
+кода. Root registry и agent executable оставить root-owned; socket/backup права
+проверить по `docs/SECURITY.md`.
+
+До переключения снять согласованную копию SQLite и отдельную защищённую копию
+master key; проверить миграцию 0003 на копии DB. Откат к старой версии после миграции
+должен использовать совместимую pre-upgrade DB snapshot, если старый код не понимает
+новую схему. Подготовить version-pinned настройки `PYTHONPATH` одновременно для web
+и agent, плюс `TUNNELUI_STATIC_DIR` от того же release. После локальной проверки
+транзакционно переключить набор unit overrides по заранее утверждённому runbook и
+перезапустить только TunnelUI web/agent; TrustTunnel production/staging не входят в
+шаг обновления приложения. Задание запускать через systemd/локальный операторский
+скрипт с журналом и проверяемым exit status, чтобы потеря SSH-сессии не оставила
+неопределённый набор половинчатых ручных команд.
+
+После переключения проверить health API и HTTPS 9443, login, чтение inbounds,
+совпадение backend/agent version и static asset SHA. Затем на отдельном staging
+TrustTunnel 8448 проверить read-only drift/preview, тестового клиента, apply,
+rollback/recovery и отсутствие секретов в журналах. При отказе вернуть оба unit
+overrides и static dir на прежний release, восстановить DB snapshot при несовместимой
+миграции, проверить HTTPS и agent socket. Старый release не удалять до завершения
+acceptance. Production 443 не рестартовать автоматически и не использовать как тест.

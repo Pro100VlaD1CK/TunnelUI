@@ -37,27 +37,49 @@ class HealthProbe:
         self.tls_probe = tls_probe or _tls
 
     async def run(self, instance: ManagedInstance, timeout: float = 5.0) -> HealthResult:
+        last: HealthResult | None = None
         try:
             async with asyncio.timeout(timeout):
-                service = await self.systemd.status(instance.service)
-                service_result = ProbeResult(
-                    "ok" if service.running else "failed",
-                    f"{service.active_state}/{service.sub_state}",
-                )
-                tcp_result = await self._one(
-                    self.tcp_probe(instance.health_host, instance.health_port, timeout),
-                    "tcp_unreachable",
-                )
-                tls_result = await self._one(
-                    self.tls_probe(
-                        instance.health_host,
-                        instance.health_port,
-                        instance.tls_server_name,
-                        timeout,
-                    ),
-                    "tls_handshake_failed",
-                )
+                while True:
+                    service = await self.systemd.status(instance.service)
+                    service_result = ProbeResult(
+                        "ok" if service.running else "failed",
+                        f"{service.active_state}/{service.sub_state}",
+                    )
+                    tcp_result = await self._one(
+                        self.tcp_probe(
+                            instance.health_host,
+                            instance.health_port,
+                            timeout,
+                        ),
+                        "tcp_unreachable",
+                    )
+                    tls_result = await self._one(
+                        self.tls_probe(
+                            instance.health_host,
+                            instance.health_port,
+                            instance.tls_server_name,
+                            timeout,
+                        ),
+                        "tls_handshake_failed",
+                    )
+                    healthy = all(
+                        item.status == "ok"
+                        for item in (service_result, tcp_result, tls_result)
+                    )
+                    last = HealthResult(
+                        healthy,
+                        service_result,
+                        tcp_result,
+                        tls_result,
+                        _quic(instance),
+                    )
+                    if healthy:
+                        return last
+                    await asyncio.sleep(0.25)
         except TimeoutError:
+            if last is not None:
+                return last
             return HealthResult(
                 False,
                 ProbeResult("unknown", "health_timeout"),
@@ -65,8 +87,6 @@ class HealthProbe:
                 ProbeResult("unknown", "health_timeout"),
                 _quic(instance),
             )
-        healthy = all(item.status == "ok" for item in (service_result, tcp_result, tls_result))
-        return HealthResult(healthy, service_result, tcp_result, tls_result, _quic(instance))
 
     @staticmethod
     async def _one(awaitable, error_code: str) -> ProbeResult:

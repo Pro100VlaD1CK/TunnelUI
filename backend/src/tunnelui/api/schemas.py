@@ -45,6 +45,8 @@ class AttachmentCreate(IdempotentAction):
 class AttachmentState(IdempotentAction):
     enabled: bool
     revision: int = Field(ge=1)
+    max_http2_conns: int | None = Field(default=None, ge=0, le=2**32 - 1)
+    max_http3_conns: int | None = Field(default=None, ge=0, le=2**32 - 1)
 
 
 class AttachmentDetach(IdempotentAction):
@@ -54,6 +56,14 @@ class AttachmentDetach(IdempotentAction):
 class ClientAccess(IdempotentAction):
     enabled: bool
     revision: int = Field(ge=1)
+
+
+class ClientDelete(IdempotentAction):
+    revision: int = Field(ge=1)
+
+
+class PendingCancel(StrictModel):
+    fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
 class ExportRequest(StrictModel):

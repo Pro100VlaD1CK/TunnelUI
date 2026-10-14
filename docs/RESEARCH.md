@@ -24,7 +24,9 @@ Commit `fab5b8353a19332f935fa30869307d37d4a898d1`.
   SIGHUP reload TLS hosts only. Credentials restart, не hot reload.
 Runtime --help установленного binary ещё требуется перед production adoption.
 
-## 3x-ui v3.8.5
+## 3x-ui v3.8.5 — историческое исследование, scope superseded
+Этот раздел сохранён как история раннего решения. С 2026-10-08 TunnelUI управляет
+только TrustTunnel; перечисленные API не используются и интеграция не планируется.
 Commit `7ef22f94c950ff09f0870e2295fa65ad5968742c`.
 - [API auth/routes](https://github.com/MHSanaei/3x-ui/blob/v3.8.5/internal/web/controller/api.go):
   Bearer token, scopes, /panel/api prefix относительно web base, inbounds/clients/setting.

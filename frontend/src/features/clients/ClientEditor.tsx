@@ -77,7 +77,7 @@ export function ClientEditor({ open, client, close }: { open: boolean; client?: 
     else mutation.mutate(values);
   };
   return <>
-    <Drawer title={client ? 'Редактировать клиента' : 'Новый клиент'} open={open} onClose={() => { if (!mutation.isPending) close(); }} size={480} className="client-drawer" destroyOnHidden>
+    <Drawer title={client ? 'Редактировать клиента' : 'Новый клиент'} open={open} onClose={() => { if (!mutation.isPending) close(); }} size={480} className="client-drawer">
       <Alert type="info" title={client ? 'Глобальная запись клиента' : 'Клиент и доступ'} description={client ? (attached ? 'Имя и комментарий можно изменить сразу. Username и срок заблокированы, пока есть привязки: для них нужен отдельный безопасный workflow применения.' : 'Изменения этой записи не затрагивают конфигурацию TrustTunnel.') : 'Можно создать только глобальную запись либо сразу привязать её к управляемому TrustTunnel и применить конфигурацию.'} />
       {mutation.error && !confirmation && <Alert role="alert" type="error" showIcon title={errorText(mutation.error)} />}
       {mutation.error instanceof ApiError && mutation.error.code === 'revision_conflict' && <Button onClick={() => { cache.invalidateQueries({ queryKey: ['clients'] }); close(); }}>Закрыть без сохранения и обновить список</Button>}
@@ -101,7 +101,7 @@ export function ClientEditor({ open, client, close }: { open: boolean; client?: 
       </Form>
     </Drawer>
     <Modal open={Boolean(confirmation)} title="Применить доступ TrustTunnel?" okText="Создать и применить" cancelText="Вернуться к форме" confirmLoading={mutation.isPending} onCancel={() => { if (!mutation.isPending) setConfirmation(undefined); }} onOk={() => confirmation && mutation.mutate(confirmation)}>
-      <p>Будут созданы глобальный клиент и привязка, затем credentials.toml пройдёт backup, atomic replace, Fake restart и health check.</p>
+      <p>Будут созданы клиент и привязка. Затем TunnelUI сохранит резервную копию credentials.toml, атомарно применит изменения, перезапустит выбранную службу и проверит её состояние. В локальном sandbox эти действия выполняются тестовым провайдером.</p>
       <p>При ошибке после записи файлов TunnelUI восстановит предыдущую конфигурацию. Пароль не попадёт в журнал операций или аудит.</p>
       {partial && <Alert type="warning" showIcon title="Глобальный клиент и привязка уже сохранены" description="Применение не завершено. Повторное создание клиента не требуется: откройте входящее и проверьте журнал операции." action={confirmation?.inbound_id && <Button size="small" onClick={() => { const inboundId = confirmation.inbound_id; setConfirmation(undefined); close(); navigate(`/inbounds?inbound=${inboundId}`); }}>Открыть входящее</Button>} />}
       {mutation.error && <Alert role="alert" type="error" showIcon title={errorText(mutation.error)} />}

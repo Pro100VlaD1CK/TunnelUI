@@ -21,6 +21,9 @@ button, input, textarea { font: inherit; }
 .toolbar .ant-select { width: 170px; }
 .ant-alert { margin-bottom: 16px; }
 .ant-table-wrapper { max-width: 100%; font-variant-numeric: tabular-nums; }
+.inbound-details-drawer .ant-drawer-content-wrapper { max-width: 100vw; transition-property: transform, box-shadow; }
+.inbound-details-drawer .ant-drawer-body, .inbound-details-drawer .ant-descriptions-item-content { min-width: 0; }
+.inbound-details-drawer .ant-descriptions-item-content { overflow-wrap: anywhere; }
 .ant-empty { margin: 40px 16px; }
 .table-note { margin-top: 12px; }
 .refresh-list { margin-bottom: 12px; }
@@ -55,7 +58,7 @@ button, input, textarea { font: inherit; }
   .section-heading { align-items: flex-start; flex-direction: column; }
   .connection-limits { display: block; }
   .toolbar .ant-input-search, .toolbar .ant-select { width: 100%; }
-  .ant-drawer-content-wrapper { max-width: 100vw; }
+  .ant-drawer-content-wrapper { max-width: 100vw; transition-property: transform, box-shadow; }
   .ant-btn { min-height: 44px; }
   .ant-btn-icon-only { min-width: 44px; }
   .ant-input, .ant-picker-input > input { font-size: 16px; }

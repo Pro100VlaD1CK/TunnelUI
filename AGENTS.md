@@ -9,5 +9,6 @@
 - Продукт, доступность и плотность данных важнее декоративных рекомендаций skill.
 - Никаких shell=True, arbitrary privileged paths/commands, plaintext secrets в DB/log/audit.
 - Integration tests используют temp directories/fakes, никогда реальный systemd.
-- Не редактировать DB 3x-ui. Изменения решений помечать superseded, не стирать историю.
+- Проект управляет только TrustTunnel; 3x-ui — UX-референс, его DB/API не трогать.
+  Изменения решений помечать superseded, не стирать историю.
 - Сообщения коммитов на русском. Не коммитить runtime, ключи, credentials и research clones.
