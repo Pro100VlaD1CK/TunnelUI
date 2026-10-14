@@ -23,6 +23,10 @@ export interface Attachment {
   applied_state: 'active' | 'disabled' | 'pending';
   sync_state: 'active' | 'pending' | 'conflict' | 'error' | 'disabled';
   revision: number;
+  max_http2_conns: number | null;
+  max_http3_conns: number | null;
+  applied_max_http2_conns: number | null;
+  applied_max_http3_conns: number | null;
 }
 
 export interface Operation {

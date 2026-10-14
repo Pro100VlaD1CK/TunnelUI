@@ -102,6 +102,9 @@ class SandboxAdoptionService:
                                       secret_ciphertext=box.encrypt(credential.password),
                                       max_http2_conns=credential.max_http2_conns,
                                       max_http3_conns=credential.max_http3_conns,
+                                      applied_max_http2_conns=credential.max_http2_conns,
+                                      applied_max_http3_conns=credential.max_http3_conns,
+                                      applied_client_enabled=True,
                                       enabled=True, desired_state="active",
                                       applied_state="active", sync_state="active"))
                 record(db, admin, "inbound.adopt", "inbound", inbound.id)

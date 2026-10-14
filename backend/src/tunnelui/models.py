@@ -67,6 +67,9 @@ class Attachment(Base):
     secret_ciphertext: Mapped[str | None] = mapped_column(Text)
     max_http2_conns: Mapped[int | None] = mapped_column(Integer)
     max_http3_conns: Mapped[int | None] = mapped_column(Integer)
+    applied_max_http2_conns: Mapped[int | None] = mapped_column(Integer)
+    applied_max_http3_conns: Mapped[int | None] = mapped_column(Integer)
+    applied_client_enabled: Mapped[bool | None] = mapped_column(Boolean)
     sync_state: Mapped[str] = mapped_column(String(32), default="pending")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     desired_state: Mapped[str] = mapped_column(String(32), default="active")
@@ -93,6 +96,44 @@ class Operation(Base):
     created_at: Mapped[int] = mapped_column(Integer, default=now)
     updated_at: Mapped[int] = mapped_column(Integer, default=now)
     completed_at: Mapped[int | None] = mapped_column(Integer)
+
+
+class ClientDeletion(Base):
+    """Secret-free replay record retained after the client row is removed."""
+
+    __tablename__ = "client_deletions"
+    idempotency_key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    client_id: Mapped[str] = mapped_column(String(36), index=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    state: Mapped[str] = mapped_column(String(32))
+    result_json: Mapped[str] = mapped_column(Text, default="{}")
+    updated_at: Mapped[int] = mapped_column(Integer, default=now)
+
+
+class AttachmentIntent(Base):
+    """Idempotency metadata; fingerprint is keyed and stores no secret text."""
+
+    __tablename__ = "attachment_intents"
+    idempotency_key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    attachment_id: Mapped[str] = mapped_column(String(36))
+    client_id: Mapped[str] = mapped_column(String(36))
+    inbound_id: Mapped[str] = mapped_column(String(36))
+    kind: Mapped[str] = mapped_column(String(32))
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[int] = mapped_column(Integer, default=now)
+
+
+class ClientAccessIntent(Base):
+    """Replay metadata for a global access change across managed inbounds."""
+
+    __tablename__ = "client_access_intents"
+    idempotency_key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    client_id: Mapped[str] = mapped_column(String(36))
+    revision: Mapped[int] = mapped_column(Integer)
+    enabled: Mapped[bool] = mapped_column(Boolean)
+    inbound_ids_json: Mapped[str] = mapped_column(Text)
+    attachment_revisions_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[int] = mapped_column(Integer, default=now)
 
 
 class AuditEvent(Base):

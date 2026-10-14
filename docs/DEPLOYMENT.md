@@ -108,3 +108,38 @@ iPhone. Production TrustTunnel остаётся на TCP/UDP 443. Эти дан�
 отказ агента, rollback и `needs_recovery`. Не выполнять проверки на production 443.
 Особенно сверить фактические unit ExecStart/WorkingDirectory, owner/mode, socket
 SO_PEERCRED, официальный CLI и health. Sample units не делают ветку production-ready.
+
+## Воспроизводимое обновление отдельного staging release (проект процедуры)
+
+Эта процедура описывает будущий операторский запуск, а не выполнялась Codex. До
+применения сверить реальные unit/override с примерными `packaging/` и проверить
+Linux CI. Не переключать рабочий Git checkout in-place: подготовить новый каталог
+release из конкретного commit SHA рядом с работающим, собрать frontend и установить
+backend/agent из одного SHA. Сохранить manifest SHA, checksums пакета и миграции.
+
+Подготовить файлы с читаемыми для service UID режимами, а не наследовать `umask 077`
+у root Git checkout: parent directories должны иметь traversal для `tunnelui`, код
+быть доступен на чтение, исполняемые файлы — на исполнение. Проверить это именно
+запуском import/read-only smoke от `tunnelui`, включая `PYTHONPATH`, static dir и
+`.venv`; не менять режимы master key, DB или private TLS key по общему правилу для
+кода. Root registry и agent executable оставить root-owned; socket/backup права
+проверить по `docs/SECURITY.md`.
+
+До переключения снять согласованную копию SQLite и отдельную защищённую копию
+master key; проверить миграцию 0003 на копии DB. Откат к старой версии после миграции
+должен использовать совместимую pre-upgrade DB snapshot, если старый код не понимает
+новую схему. Подготовить version-pinned настройки `PYTHONPATH` одновременно для web
+и agent, плюс `TUNNELUI_STATIC_DIR` от того же release. После локальной проверки
+транзакционно переключить набор unit overrides по заранее утверждённому runbook и
+перезапустить только TunnelUI web/agent; TrustTunnel production/staging не входят в
+шаг обновления приложения. Задание запускать через systemd/локальный операторский
+скрипт с журналом и проверяемым exit status, чтобы потеря SSH-сессии не оставила
+неопределённый набор половинчатых ручных команд.
+
+После переключения проверить health API и HTTPS 9443, login, чтение inbounds,
+совпадение backend/agent version и static asset SHA. Затем на отдельном staging
+TrustTunnel 8448 проверить read-only drift/preview, тестового клиента, apply,
+rollback/recovery и отсутствие секретов в журналах. При отказе вернуть оба unit
+overrides и static dir на прежний release, восстановить DB snapshot при несовместимой
+миграции, проверить HTTPS и agent socket. Старый release не удалять до завершения
+acceptance. Production 443 не рестартовать автоматически и не использовать как тест.

@@ -201,7 +201,7 @@ def test_uncertain_replace_reply_uses_existing_rollback_contract(
         assert operation.error_code == "agent_unavailable"
 
 
-def test_drift_is_rechecked_and_pending_attachment_is_not_active(
+def test_known_drift_is_rejected_before_creating_attachment(
     sandbox_authenticated, sandbox_app
 ):
     inbound_id = adopt(sandbox_authenticated)
@@ -211,8 +211,7 @@ def test_drift_is_rechecked_and_pending_attachment_is_not_active(
     assert response.status_code == 409 and response.json()["code"] == "drift_conflict"
     with sandbox_app.state.sessions() as db:
         attachment = db.scalar(select(Attachment).where(Attachment.client_id == client["id"]))
-        assert attachment.sync_state == "conflict"
-        assert attachment.applied_state == "pending"
+        assert attachment is None
 
 
 def test_external_edit_after_prepare_cannot_be_overwritten(

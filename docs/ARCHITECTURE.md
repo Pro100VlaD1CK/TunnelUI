@@ -60,6 +60,25 @@ vpn.toml и публичный адрес хранятся раздельно. �
 оператора на staging.
 
 ## Apply и recovery
+Client/attachment actions выполняют preflight known drift и чужого pending до записи
+desired state. `AttachmentIntent` и `ClientAccessIntent` фиксируют idempotency до apply;
+fingerprint пароля — keyed HMAC, plaintext в intent нет. Повтор того же запроса после
+потери ответа возвращает прежний Operation, не повторяя restart. Глобальный enabled
+применяется последовательно к каждому inbound; общий результат может быть partial.
+`ClientDeletion` сохраняет secret-free replay результата. Полное удаление клиента
+сначала помечает все его attachments на отзыв, применяет credentials по inbound и
+проверяет отсутствие username в каждом актуальном snapshot. DB client/attachments
+удаляются только после подтверждения всех файлов/hashes; partial оставляет запись,
+операции и явный путь восстановления. Это не общая транзакция нескольких служб.
+
+`GET /inbounds/{id}/pending` показывает изменения, внешние файлы и влияние отмены
+глобального enabled на другие inbounds. Fingerprint включает revisions и ожидаемые
+hashes; `cancel-pending` повторно проверяет preview под process/agent locks и не
+переписывает файлы. При отмене частично применённого глобального доступа другой
+inbound может стать pending — оператор затем применяет его отдельно. Re-import
+сохраняет запрет при pending/recovery; после известного drift без desired commit
+re-import возможен сразу. При гонке после preflight pending остаётся видимым.
+
 Один coordinator использует per-inbound in-process lock и idempotency ID; Linux
 environment добавляет agent-owned OS lock. Durable
 DB states: pending, preparing, backed_up, writing, applying, checking, succeeded,

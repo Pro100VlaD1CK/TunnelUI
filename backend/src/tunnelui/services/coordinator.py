@@ -2,7 +2,7 @@ import hashlib
 import json
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -134,10 +134,14 @@ class TrustTunnelCoordinator:
             raise DomainError("sandbox_environment_unavailable", 503)
         return environment
 
-    def _render(self, db: Session, inbound_id: str) -> bytes:
+    def _render_state(self, db: Session, inbound_id: str) -> tuple[bytes, dict[str, tuple[int, int]]]:
         rows = db.execute(select(Attachment, Client).join(
             Client, Client.id == Attachment.client_id
         ).where(Attachment.inbound_id == inbound_id).order_by(Client.username)).all()
+        revisions = {
+            attachment.id: (attachment.revision, client.revision)
+            for attachment, client in rows
+        }
         credentials = []
         for attachment, client in rows:
             if attachment.desired_state != "active" or not attachment.enabled:
@@ -152,7 +156,10 @@ class TrustTunnelCoordinator:
                 max_http2_conns=attachment.max_http2_conns,
                 max_http3_conns=attachment.max_http3_conns,
             ))
-        return render_credentials(credentials, int(time.time()))
+        return render_credentials(credentials, int(time.time())), revisions
+
+    def _render(self, db: Session, inbound_id: str) -> bytes:
+        return self._render_state(db, inbound_id)[0]
 
     @staticmethod
     def _fingerprint(inbound_id: str, kind: str, key: str) -> str:
@@ -168,8 +175,6 @@ class TrustTunnelCoordinator:
                 raise DomainError("inbound_not_managed")
             if inbound.config_state == "recovery_required":
                 raise DomainError("recovery_required")
-            content = self._render(db, inbound_id)
-            parse_credentials(content)
             environment = self.environment(inbound)
             fingerprint = self._fingerprint(inbound_id, kind, idempotency_key)
             existing = db.scalar(select(Operation).where(
@@ -180,6 +185,8 @@ class TrustTunnelCoordinator:
                     raise DomainError("idempotency_conflict")
                 return operation_output(existing)
             with self.locks.acquire(inbound_id):
+                content, rendered_revisions = self._render_state(db, inbound_id)
+                parse_credentials(content)
                 operation_id = str(uuid.uuid4())
                 with environment.operation(operation_id):
                     if active_operation(db, inbound_id):
@@ -286,7 +293,7 @@ class TrustTunnelCoordinator:
                     inbound.hashes_json = operation.result_hashes_json
                     inbound.config_state = "synced"
                     inbound.updated_at = now()
-                    self._mark_applied(db, inbound_id)
+                    self._mark_applied(db, inbound_id, rendered_revisions)
                     db.commit()
                     transition(db, operation, "succeeded")
                     record_result(db, admin, "config.apply", "inbound", inbound_id,
@@ -319,19 +326,204 @@ class TrustTunnelCoordinator:
                         if value != hashes(inbound.hashes_json).get(key)
                     )}
 
-    def cancel_pending(self, inbound_id: str) -> None:
+    def _pending_view(self, db: Session, inbound: Inbound,
+                      environment: ManagedEnvironment) -> tuple[dict, list[Attachment]]:
+        try:
+            current = {
+                key: source_hash(value) for key, value in environment.snapshot().items()
+            }
+        except OSError:
+            raise DomainError("management_unavailable", 503) from None
+        expected = hashes(inbound.hashes_json)
+        rows = db.execute(select(Attachment, Client).join(
+            Client, Client.id == Attachment.client_id
+        ).where(Attachment.inbound_id == inbound.id).order_by(Client.username)).all()
+        def is_pending(attachment: Attachment, client: Client) -> bool:
+            return (
+                attachment.desired_state != attachment.applied_state
+                or (attachment.max_http2_conns, attachment.max_http3_conns) != (
+                    attachment.applied_max_http2_conns,
+                    attachment.applied_max_http3_conns,
+                )
+                or (attachment.applied_client_enabled is not None
+                    and client.enabled != attachment.applied_client_enabled)
+            )
+        changes = [{
+            "attachment_id": attachment.id,
+            "client_id": client.id,
+            "username": client.username,
+            "desired_state": attachment.desired_state,
+            "applied_state": attachment.applied_state,
+            "revision": attachment.revision,
+            "desired_limits": [attachment.max_http2_conns, attachment.max_http3_conns],
+            "applied_limits": [
+                attachment.applied_max_http2_conns, attachment.applied_max_http3_conns
+            ],
+            "desired_global_enabled": client.enabled,
+            "applied_global_enabled": attachment.applied_client_enabled,
+        } for attachment, client in rows
+            if is_pending(attachment, client)]
+        global_client_ids = sorted({
+            client.id for attachment, client in rows
+            if attachment.applied_client_enabled is not None
+            and client.enabled != attachment.applied_client_enabled
+        })
+        affected = []
+        for client_id in global_client_ids:
+            for other, other_inbound in db.execute(select(Attachment, Inbound).join(
+                Inbound, Inbound.id == Attachment.inbound_id
+            ).where(Attachment.client_id == client_id).order_by(Inbound.name)).all():
+                affected.append({
+                    "client_id": client_id,
+                    "inbound_id": other_inbound.id,
+                    "inbound_name": other_inbound.name,
+                    "applied_global_enabled": other.applied_client_enabled,
+                    "attachment_revision": other.revision,
+                    "inbound_state": other_inbound.config_state,
+                    "inbound_hashes": hashes(other_inbound.hashes_json),
+                })
+        payload = {
+            "inbound_id": inbound.id, "expected": expected, "current": current,
+            "changes": changes, "global_impact": affected,
+        }
+        fingerprint = hashlib.sha256(json.dumps(
+            payload, sort_keys=True, separators=(",", ":")
+        ).encode()).hexdigest()
+        return {
+            "fingerprint": fingerprint,
+            "changed_files": sorted(
+                key for key, value in current.items() if value != expected.get(key)
+            ),
+            "changes": changes,
+            "affected_inbounds": [{key: item[key] for key in (
+                "client_id", "inbound_id", "inbound_name", "applied_global_enabled"
+            )} for item in affected],
+        }, [attachment for attachment, client in rows if is_pending(attachment, client)]
+
+    def pending_preview(self, inbound_id: str) -> dict:
         with self.sessions() as db:
             inbound = db.get(Inbound, inbound_id)
             if not inbound:
                 raise DomainError("inbound_not_found", 404)
-            for attachment in db.scalars(select(Attachment).where(
-                Attachment.inbound_id == inbound_id
-            )).all():
-                attachment.desired_state = attachment.applied_state
-                attachment.enabled = attachment.applied_state == "active"
-                attachment.sync_state = attachment.applied_state
-                attachment.updated_at = now()
-            db.commit()
+            if active_operation(db, inbound_id):
+                raise DomainError("operation_in_progress")
+            environment = self.environment(inbound)
+            with self.locks.acquire(inbound_id), environment.operation(str(uuid.uuid4())):
+                view, _ = self._pending_view(db, inbound, environment)
+                return view
+
+    def apply_pending(self, inbound_id: str, key: str, admin: str) -> dict:
+        with self.sessions() as db:
+            existing = db.scalar(select(Operation).where(Operation.idempotency_key == key))
+            if existing:
+                if existing.request_fingerprint != self._fingerprint(
+                    inbound_id, "pending_apply", key
+                ):
+                    raise DomainError("idempotency_conflict")
+                return operation_output(existing)
+        view = self.pending_preview(inbound_id)
+        if not view["changes"]:
+            raise DomainError("no_pending_changes")
+        if view["changed_files"]:
+            raise DomainError("drift_conflict")
+        return self.apply(inbound_id, key, admin, "pending_apply")
+
+    def cancel_pending(self, inbound_id: str, fingerprint: str, admin: str) -> dict:
+        with self.sessions() as db:
+            inbound = db.get(Inbound, inbound_id)
+            if not inbound:
+                raise DomainError("inbound_not_found", 404)
+            if inbound.config_state == "recovery_required":
+                raise DomainError("recovery_required")
+            if active_operation(db, inbound_id):
+                raise DomainError("operation_in_progress")
+            environment = self.environment(inbound)
+            candidate_rows = db.execute(select(Attachment, Client).join(
+                Client, Client.id == Attachment.client_id
+            ).where(Attachment.inbound_id == inbound_id)).all()
+            global_client_ids = {
+                client.id for attachment, client in candidate_rows
+                if attachment.applied_client_enabled is not None
+                and client.enabled != attachment.applied_client_enabled
+            }
+            affected_ids = {inbound_id}
+            for client_id in global_client_ids:
+                affected_ids.update(db.scalars(select(Attachment.inbound_id).where(
+                    Attachment.client_id == client_id
+                )).all())
+            with ExitStack() as stack:
+                for affected_id in sorted(affected_ids):
+                    affected_inbound = db.get(Inbound, affected_id)
+                    if (not affected_inbound or not affected_inbound.enabled
+                            or affected_inbound.config_state == "recovery_required"
+                            or active_operation(db, affected_id)):
+                        raise DomainError("pending_cancel_unsafe")
+                    stack.enter_context(self.locks.acquire(affected_id))
+                    stack.enter_context(self.environment(affected_inbound).operation(
+                        str(uuid.uuid4())
+                    ))
+                view, rows = self._pending_view(db, inbound, environment)
+                if view["fingerprint"] != fingerprint:
+                    raise DomainError("pending_preview_changed")
+                usernames = {
+                    item["attachment_id"]: item["username"] for item in view["changes"]
+                }
+                if any(attachment.applied_state == "pending" for attachment in rows):
+                    try:
+                        actual = {
+                            credential.username for credential in parse_credentials(
+                                environment.snapshot()["credentials"]
+                            )
+                        }
+                    except OSError:
+                        raise DomainError("management_unavailable", 503) from None
+                    if any(
+                        usernames[attachment.id] in actual
+                        for attachment in rows if attachment.applied_state == "pending"
+                    ):
+                        raise DomainError("pending_cancel_unsafe")
+                global_clients = {
+                    attachment.client_id for attachment in rows
+                    if attachment.applied_client_enabled is not None
+                    and db.get(Client, attachment.client_id).enabled
+                    != attachment.applied_client_enabled
+                }
+                for client_id in global_clients:
+                    all_rows = db.scalars(select(Attachment).where(
+                        Attachment.client_id == client_id
+                    )).all()
+                    if any(row.applied_client_enabled is None for row in all_rows):
+                        raise DomainError("pending_cancel_unsafe")
+                    client = db.get(Client, client_id)
+                    target = next(row.applied_client_enabled for row in rows
+                                  if row.client_id == client_id)
+                    client.enabled = target
+                    client.revision += 1
+                    client.updated_at = now()
+                    for other in all_rows:
+                        if other.inbound_id != inbound_id:
+                            other.sync_state = (
+                                "pending" if other.applied_client_enabled != target
+                                else other.sync_state
+                            )
+                            other.updated_at = now()
+                for attachment in rows:
+                    if attachment.applied_state == "pending":
+                        # A newly created attachment was never applied.
+                        db.delete(attachment)
+                        continue
+                    attachment.desired_state = attachment.applied_state
+                    attachment.enabled = attachment.applied_state == "active"
+                    attachment.sync_state = attachment.applied_state
+                    attachment.max_http2_conns = attachment.applied_max_http2_conns
+                    attachment.max_http3_conns = attachment.applied_max_http3_conns
+                    attachment.revision += 1
+                    attachment.updated_at = now()
+                if rows:
+                    record_result(db, admin, "inbound.cancel_pending", "inbound",
+                                  inbound_id, "success")
+                db.commit()
+                return {"cancelled": len(rows), "changed_files": view["changed_files"]}
 
     def reimport(self, inbound_id: str, admin: str) -> dict:
         with self.sessions() as db:
@@ -357,10 +549,22 @@ class TrustTunnelCoordinator:
                     Client, Client.id == Attachment.client_id
                 ).where(Attachment.inbound_id == inbound_id)).all()
                 local = {client.username: (attachment, client) for attachment, client in rows}
-                if set(local) != set(external):
+                if set(external) - set(local) or any(
+                    attachment.applied_state == "active"
+                    for username, (attachment, _client) in local.items()
+                    if username not in external
+                ) or any(
+                    not local[username][1].enabled for username in external
+                ):
                     raise DomainError("reimport_mapping_required")
                 if any(
                     attachment.desired_state != attachment.applied_state
+                    or (attachment.max_http2_conns, attachment.max_http3_conns) != (
+                        attachment.applied_max_http2_conns,
+                        attachment.applied_max_http3_conns,
+                    )
+                    or (attachment.applied_client_enabled is not None
+                        and _client.enabled != attachment.applied_client_enabled)
                     for attachment, _client in rows
                 ):
                     raise DomainError("pending_changes_require_cancel")
@@ -388,6 +592,9 @@ class TrustTunnelCoordinator:
                     attachment.secret_ciphertext = self.box.encrypt(credential.password)
                     attachment.max_http2_conns = credential.max_http2_conns
                     attachment.max_http3_conns = credential.max_http3_conns
+                    attachment.applied_max_http2_conns = credential.max_http2_conns
+                    attachment.applied_max_http3_conns = credential.max_http3_conns
+                    attachment.applied_client_enabled = True
                     attachment.enabled = True
                     attachment.desired_state = "active"
                     attachment.applied_state = "active"
@@ -467,14 +674,25 @@ class TrustTunnelCoordinator:
                     db.commit()
                     return operation_output(operation)
 
-    def _mark_applied(self, db: Session, inbound_id: str) -> None:
-        for attachment in db.scalars(select(Attachment).where(
-            Attachment.inbound_id == inbound_id
+    def _mark_applied(self, db: Session, inbound_id: str,
+                      rendered_revisions: dict[str, tuple[int, int]]) -> None:
+        for attachment, client in db.execute(select(Attachment, Client).join(
+            Client, Client.id == Attachment.client_id
+        ).where(Attachment.inbound_id == inbound_id).execution_options(
+            populate_existing=True
         )).all():
+            if rendered_revisions.get(attachment.id) != (
+                attachment.revision, client.revision
+            ):
+                attachment.sync_state = "pending"
+                continue
             attachment.applied_state = (
                 "active" if attachment.desired_state == "active" and attachment.enabled else "disabled"
             )
             attachment.sync_state = attachment.applied_state
+            attachment.applied_max_http2_conns = attachment.max_http2_conns
+            attachment.applied_max_http3_conns = attachment.max_http3_conns
+            attachment.applied_client_enabled = client.enabled
             attachment.updated_at = now()
 
     def _mark_error(self, db: Session, inbound_id: str) -> None:
