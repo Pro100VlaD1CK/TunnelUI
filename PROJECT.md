@@ -169,8 +169,10 @@ TunnelUI HTTPS TCP 9443. Web работает как `tunnelui`, агент — 
   только на loopback; UI показывает недоступность и область счётчиков.
 
 ## Сейчас в работе
-Завершение ветки `codex/trusttunnel-settings-rules`: локальные tests/UX review,
-отдельный PR и Linux CI. PR #3 Credentials/Expiry прошёл свой CI, но находится в
+Ветка `codex/trusttunnel-settings-rules` опубликована в draft PR #4; Linux CI
+`Checks` run #21 прошёл для кодового head `9ae8622` (backend, linux-agent,
+frontend/E2E). Последующие документальные коммиты не меняют runtime-код.
+PR #3 Credentials/Expiry прошёл свой CI, но находится в
 самостоятельной ветке и не входит в базу этой ветки. Совместное состояние обоих PR
 потребует отдельного integration regression после объединения. Bind address,
 TLS keys, listener protocols остаются read-only; для `vpn.toml`/`rules.toml`
@@ -179,16 +181,15 @@ TLS keys, listener protocols остаются read-only; для `vpn.toml`/`rule
 TypeScript pass; Vitest 3 passed; Vite build pass; Playwright 6 passed, включая
 новый sandbox путь settings/rules и mobile 320/375/390. Impeccable detector —
 0 findings; ручной audit/harden/polish выявил и исправил no-op edit rules,
-состояние неуспешного apply и сохранение group при atomic replace. Первый Linux CI
-PR #4 прошёл все jobs; compatibility-коммит требует повторного CI. Во временном
+состояние неуспешного apply и сохранение group при atomic replace. Во временном
 локальном worktree с PR #3 разрешены merge conflicts для проверки: объединённые
 backend 153 passed/13 POSIX skipped, TypeScript, Vitest 6, Vite, Playwright 7 passed.
 Это проверка временного результата, не merge PR: при реальном объединении нужно
 перенести разрешение конфликтов в coordinator/API/Settings и повторить CI.
 
 ## Следующие задачи
-1. Прогнать Linux CI для ветки настроек/правил и отдельно проверить совместимость
-   с PR #3 Credentials/Expiry после объединения веток.
+1. После фактического объединения PR #3 и PR #4 разрешить текстовые конфликты и
+   повторить общий Linux CI; отдельный временный локальный регресс уже прошёл.
 2. Отдельно согласовать и выполнить Debian staging acceptance `vpn`/`rules` apply,
    file owner/group/mode, rollback/recovery и `/clients` без изменения production.
 3. Certificate read-only detection, metrics enable с явным loopback guard,
@@ -228,8 +229,8 @@ backend 153 passed/13 POSIX skipped, TypeScript, Vitest 6, Vite, Playwright 7 pa
   detection, journal API,
   backup retention; QUIC health обозначен `unverified`, а не healthy. IPC request ID
   не дедуплицирует повторное действие; durable idempotency принадлежит coordinator.
-- Linux-only tests пропускаются на Windows; GitHub Actions Linux job настроен,
-  но изменения настроек/правил ещё не проходили CI. По сообщению владельца,
+- Linux-only tests пропускаются на Windows; GitHub Actions Linux job для PR #4
+  прошёл успешно. По сообщению владельца,
   backend на VPS до текущих изменений имел результат 114 passed, 1 warning.
 - Проверка hash у агента уменьшает окно гонки с внешним редактором, но не является
   межпроцессной блокировкой для ручного редактора вне TunnelUI: между сравнением
@@ -293,8 +294,8 @@ DB backup и master-key backup хранятся раздельно. `docs/DEPLOY
 
 ## Changelog
 - 2026-10-15: отдельная ветка редактора v1.1.0 настроек/Rules и read-only
-  `/clients`; новые typed agent file operations, sandbox tests и UI. Linux CI и
-  staging для этого изменения ещё требуются. Локальный совместный прогон с PR #3
+  `/clients`; новые typed agent file operations, sandbox tests и UI. Linux CI
+  прошёл; staging для этого изменения ещё требуется. Локальный совместный прогон с PR #3
   выявил позиционный конфликт `coordinator.apply`; исправлен именованным вызовом.
 - 2026-10-09: client lifecycle: safe multi-inbound revoke/delete, attachment limits,
   global access intents, preflight drift/pending, compare-and-cancel preview и
