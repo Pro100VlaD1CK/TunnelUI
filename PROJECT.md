@@ -177,13 +177,15 @@ TunnelUI HTTPS TCP 9443. Web работает как `tunnelui`, агент — 
 Локальный credential/expiry проход: миграция 0004, username/expiry apply,
 password rotation, opt-in durable expiry worker и UI. Существующие coordinator,
 journal/recovery и Linux Agent сохранены. Все операции выполнялись только на
-синтетических данных; Linux CI и Debian staging для этого diff ещё не запускались.
+синтетических данных. В draft PR #3 Linux CI для кодового SHA `5c9a8a5` прошёл:
+backend, linux-agent и frontend/Playwright. Debian staging для этого изменения
+не запускался; каждый последующий push требует повторной проверки CI.
 На Windows: Ruff pass; pytest 140 passed, 12 Linux-only skipped, 1 upstream
 Starlette/httpx warning; TypeScript pass; Vite build pass (известный Ant chunk
 warning); Vitest 6 passed; Playwright 7 passed на двух изолированных sandbox.
 Impeccable detector: 0 findings; ручной audit/harden/polish исправил mobile
-confirmation title и навигацию Settings. Linux-only CI, timer unit и реальный
-TrustTunnel для этого diff не проверялись.
+confirmation title и навигацию Settings. Timer unit и реальный TrustTunnel для
+этого изменения не проверялись на staging.
 
 ## Следующие задачи
 1. Запустить Linux CI и повторить Debian 12 staging acceptance для текущих изменений:
