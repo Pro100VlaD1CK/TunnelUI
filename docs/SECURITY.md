@@ -64,6 +64,12 @@ arbitrary paths/commands. stdout CLI может содержать пароль/
 неопределённый D-Bus outcome требуют operator review по Operation state.
 Для `files.commit_credentials` agent проверяет typed hash precondition всех managed
 файлов перед rename; явный drift не вызывает rollback поверх внешнего edit.
+Для `vpn`/`rules` действуют отдельные typed file IDs и тот же hash precondition:
+HTTP не может передать агенту путь или команду. Новый temp сохраняет owner, group и
+mode исходного файла; backup/restore используют проверенные descriptors и fsync.
+Неподтверждённая версия TrustTunnel и незнакомая структура rules блокируют запись.
+Read-only `/clients` допускается только с literal loopback IP при явном включении
+per-client metrics; чтение ограничено timeout и 2 MiB, IP/traffic не пишутся в БД.
 Перед restore coordinator также сравнивает текущие hashes с исходным и записанным
 состоянием; неизвестное состояние требует ручного recovery. Ручной редактор вне
 lock агента сохраняет короткое TOCTOU окно между hash check и rename.
@@ -83,6 +89,9 @@ tmpfiles заранее создаёт root-owned runtime/backup каталог�
   затем повторить Debian staging acceptance на отдельном TrustTunnel instance:
   socket/SO_PEERCRED, registry, D-Bus, unit sandboxing, file owners/modes,
   metadata re-import, drift, rollback/recovery и CLI export.
+- Для нового редактора отдельно проверить на Debian staging конфигурацию `vpn` и
+  `rules`, владельца/группу/права после replace, restart/health и rollback/recovery.
+  Сопоставить PR настроек с отдельным PR Credentials/Expiry перед общим release.
 - Проверить endpoint-specific health и QUIC с тестовым credential, если требуется
   подтверждение UDP/HTTP3; текущий probe подтверждает service/TCP/TLS, QUIC — unknown.
 - Сверить реальный systemd ExecStart/WorkingDirectory с root registry: текущий

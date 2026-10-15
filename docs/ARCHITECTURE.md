@@ -28,10 +28,29 @@ Root-owned `/etc/tunnelui/agent.toml` связывает ID с unit, binary, wor
 повторы unit/files и некорректные типы отвергаются. Агент поддерживает `lock.acquire`,
 `lock.release`, `files.snapshot`, `files.backup`, `files.prepare_credentials`,
 `files.commit_credentials`, `files.restore_credentials`, `files.cleanup`,
+`files.prepare_config`, `files.commit_config`, `files.restore_config`,
+`files.cleanup_config` (только typed `vpn`/`rules`),
 `service.status`, `service.restart`, allowlisted `service.reload`, `health.probe`,
 `profile.export`, `managed.describe`. Агент сообщает allowlisted metadata для Linux
 discovery/adoption; journal streaming и произвольный config apply не поддерживаются.
 Reload по умолчанию запрещён; credentials требуют restart.
+
+Для настроек и правил `ConfigurationService` читает фактический snapshot и допускает
+только подтверждённую версию 1.1.0. Редактор vpn.toml ограничен семью полями:
+`ipv6_available`, `allow_private_network_connections` и пятью timeout в секундах.
+Listen/bind, TLS paths, listener protocols, forwarding и metrics listener не меняются.
+Правила — только официальный упорядоченный `[[rule]]` с `cidr`,
+`client_random_prefix`, `action`; неподдерживаемая структура блокирует запись.
+tomlkit сохраняет не редактируемые поля и комментарии по возможности. Preview
+связывает желаемое состояние с hashes всех managed files; apply повторно проверяет
+их под process/agent locks, затем использует существующие backup/checkpoint/restart/
+health/rollback/recovery. Новые agent IPC операции не принимают filesystem paths.
+
+RuntimeMetricsService не применяет конфигурацию и не сохраняет наблюдения. Только
+если подтверждённая версия и включён `per_client_metrics`, endpoint `/clients`
+опрашивается по literal loopback IP из vpn.toml с timeout и лимитом ответа 2 MiB.
+Отсутствие источника, запрет listener и нулевые значения различаются; счётчики
+подписаны как относящиеся к текущему процессу endpoint, без quota/accounting.
 
 Файловый adapter проходит директории через `openat`/`O_NOFOLLOW`, проверяет owner,
 mode, regular file и link count, ограничивает файл 4 MiB, пишет same-directory temp,

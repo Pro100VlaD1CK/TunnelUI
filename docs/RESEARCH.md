@@ -9,6 +9,10 @@ Commit `fab5b8353a19332f935fa30869307d37d4a898d1`.
   Запрещено использовать generation prefix option при read-only export: оно меняет rules.
 - [Configuration](https://github.com/TrustTunnel/TrustTunnel/blob/v1.1.0/CONFIGURATION.md):
   listen_protocols.http1/http2/quic, main_hosts, client array-of-tables, rule array-of-tables.
+  Подтверждены значения по умолчанию семи редактируемых полей vpn.toml:
+  `ipv6_available=true`, `allow_private_network_connections=false`, timeout
+  TLS/client/connect/TCP/UDP = `10/600/30/604800/300` секунд. Bind/listeners,
+  TLS и forwarding оставлены read-only в текущем allowlist.
 - [Settings parser](https://github.com/TrustTunnel/TrustTunnel/blob/v1.1.0/lib/src/settings.rs):
   deserialize_clients требует array-of-tables; demangle_toml_string удаляет quotes/trim.
   Поэтому нулевой набор и непрозрачные credential transformations — отдельные риски.
@@ -20,6 +24,8 @@ Commit `fab5b8353a19332f935fa30869307d37d4a898d1`.
   ordered first-match; default allow; special deny при отсутствующем client_random и
   наличии prefix rules. Mask matching upstream использует minimum length; UI вводит
   более строгую одинаковую длину prefix/mask, чтобы избежать неоднозначности.
+  Порядок `[[rule]]` сохраняется; UI не предлагает правила по username, поскольку
+  этот matcher отсутствует в v1.1.0.
 - [Endpoint README](https://github.com/TrustTunnel/TrustTunnel/blob/v1.1.0/endpoint/README.md):
   SIGHUP reload TLS hosts only. Credentials restart, не hot reload.
 Runtime --help установленного binary ещё требуется перед production adoption.
