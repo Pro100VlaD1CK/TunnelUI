@@ -216,5 +216,6 @@ class ConfigurationService:
         if view["fingerprint"] != fingerprint:
             raise DomainError("config_preview_changed")
         return self.coordinator.apply(
-            inbound_id, key, self.admin, kind, (file_id, content), request_fingerprint
+            inbound_id, key, self.admin, kind,
+            replacement=(file_id, content), request_fingerprint=request_fingerprint,
         )

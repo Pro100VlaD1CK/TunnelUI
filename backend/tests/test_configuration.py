@@ -225,7 +225,7 @@ def test_config_rollback_and_recovery_use_correct_file(sandbox_authenticated, sa
     coordinator.interrupt_at = "after_replace"
     with pytest.raises(SimulatedCrash):
         coordinator.apply(inbound_id, "settings-crash-key", "test-admin",
-                          "settings_apply", ("vpn", content),
+                          "settings_apply", replacement=("vpn", content),
                           request_fingerprint="1" * 64)
     assert path.read_bytes() != original
     with sandbox_app.state.sessions() as db:
