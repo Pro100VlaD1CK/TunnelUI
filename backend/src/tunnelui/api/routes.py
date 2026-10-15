@@ -19,6 +19,10 @@ from tunnelui.api.schemas import (
     IdempotentAction,
     LoginInput,
     PendingCancel,
+    RulesApply,
+    RulesPreview,
+    SettingsApply,
+    SettingsPreview,
 )
 from tunnelui.domain.errors import DomainError
 from tunnelui.models import Attachment, AuditEvent, Client, Inbound, Operation, now
@@ -29,7 +33,9 @@ from tunnelui.services.audit import record
 from tunnelui.services.client_access import ClientAccessService
 from tunnelui.services.client_deletion import ClientDeletionService
 from tunnelui.services.clients import ClientService
+from tunnelui.services.configuration import ConfigurationService
 from tunnelui.services.operations import active_operation, operation_output
+from tunnelui.services.runtime_metrics import RuntimeMetricsService
 from tunnelui.system.provider import SystemOperationError
 
 router = APIRouter(prefix="/api")
@@ -245,6 +251,63 @@ def inbound_detail(inbound_id: str, request: Request, _=Depends(admin), db=Depen
         } for attachment, client in attachments],
         "operations": [operation_output(item) for item in operations],
     }
+
+
+@router.get("/inbounds/{inbound_id}/settings")
+def inbound_settings(inbound_id: str, request: Request, identity=Depends(admin)):
+    return ConfigurationService(management(request).coordinator, identity.username).settings(
+        inbound_id
+    )
+
+
+@router.post("/inbounds/{inbound_id}/settings/preview")
+def preview_inbound_settings(inbound_id: str, data: SettingsPreview,
+                             request: Request, identity=Depends(admin)):
+    view, _content = ConfigurationService(
+        management(request).coordinator, identity.username
+    ).preview_settings(inbound_id, data.values)
+    return view
+
+
+@router.post("/inbounds/{inbound_id}/settings/apply")
+def apply_inbound_settings(inbound_id: str, data: SettingsApply,
+                           request: Request, identity=Depends(admin)):
+    result = ConfigurationService(
+        management(request).coordinator, identity.username
+    ).apply(inbound_id, "vpn", data.values, data.fingerprint, data.idempotency_key)
+    return {"operation": result}
+
+
+@router.get("/inbounds/{inbound_id}/rules")
+def inbound_rules(inbound_id: str, request: Request, identity=Depends(admin)):
+    return ConfigurationService(management(request).coordinator, identity.username).rules(
+        inbound_id
+    )
+
+
+@router.post("/inbounds/{inbound_id}/rules/preview")
+def preview_inbound_rules(inbound_id: str, data: RulesPreview,
+                          request: Request, identity=Depends(admin)):
+    view, _content = ConfigurationService(
+        management(request).coordinator, identity.username
+    ).preview_rules(inbound_id, data.rules)
+    return view
+
+
+@router.post("/inbounds/{inbound_id}/rules/apply")
+def apply_inbound_rules(inbound_id: str, data: RulesApply,
+                        request: Request, identity=Depends(admin)):
+    result = ConfigurationService(
+        management(request).coordinator, identity.username
+    ).apply(inbound_id, "rules", [rule.model_dump(exclude_none=True) for rule in data.rules],
+            data.fingerprint, data.idempotency_key)
+    return {"operation": result}
+
+
+@router.get("/inbounds/{inbound_id}/metrics/clients")
+def inbound_client_metrics(inbound_id: str, request: Request,
+                           _=Depends(admin), db=Depends(db_session)):
+    return RuntimeMetricsService(management(request).coordinator).clients(db, inbound_id)
 
 
 @router.get("/trusttunnel/discovery")

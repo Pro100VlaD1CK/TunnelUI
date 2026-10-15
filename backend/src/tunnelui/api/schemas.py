@@ -3,6 +3,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from tunnelui.domain.clients import ClientInput, ClientUpdate  # noqa: F401
+from tunnelui.domain.rules import Rule
 
 
 class StrictModel(BaseModel):
@@ -63,6 +64,22 @@ class ClientDelete(IdempotentAction):
 
 
 class PendingCancel(StrictModel):
+    fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class SettingsPreview(StrictModel):
+    values: dict[str, bool | int] = Field(min_length=1, max_length=7)
+
+
+class SettingsApply(SettingsPreview, IdempotentAction):
+    fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class RulesPreview(StrictModel):
+    rules: list[Rule] = Field(max_length=200)
+
+
+class RulesApply(RulesPreview, IdempotentAction):
     fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
