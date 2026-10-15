@@ -1,4 +1,5 @@
 """Disposable loopback-only server for browser acceptance tests, never production."""
+import argparse
 import shutil
 import tempfile
 from pathlib import Path
@@ -12,6 +13,9 @@ from tunnelui.models import Admin
 from tunnelui.security import password_hasher
 
 root = Path(__file__).resolve().parents[1]
+parser = argparse.ArgumentParser()
+parser.add_argument("--port", type=int, choices=[8765, 8766], default=8765)
+port = parser.parse_args().port
 (root / ".runtime").mkdir(exist_ok=True)
 with tempfile.TemporaryDirectory(prefix="e2e-", dir=root / ".runtime") as temporary:
     temporary_path = Path(temporary)
@@ -23,9 +27,9 @@ with tempfile.TemporaryDirectory(prefix="e2e-", dir=root / ".runtime") as tempor
     config.set_main_option("sqlalchemy.url", url)
     command.upgrade(config, "head")
     app = create_app(Settings(database_url=url, development=True, secure_cookie=False,
-                             origin="http://127.0.0.1:8765", static_dir=root / "frontend/dist",
+                             origin=f"http://127.0.0.1:{port}", static_dir=root / "frontend/dist",
                              master_key_file=temporary_path / "master.key", sandbox_root=fixture))
     with app.state.sessions() as db:
         db.add(Admin(username="test-admin", password_hash=password_hasher.hash("test-only-password")))
         db.commit()
-    uvicorn.run(app, host="127.0.0.1", port=8765, access_log=False)
+    uvicorn.run(app, host="127.0.0.1", port=port, access_log=False)
