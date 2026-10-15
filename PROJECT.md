@@ -179,8 +179,12 @@ TLS keys, listener protocols остаются read-only; для `vpn.toml`/`rule
 TypeScript pass; Vitest 3 passed; Vite build pass; Playwright 6 passed, включая
 новый sandbox путь settings/rules и mobile 320/375/390. Impeccable detector —
 0 findings; ручной audit/harden/polish выявил и исправил no-op edit rules,
-состояние неуспешного apply и сохранение group при atomic replace. Linux CI/staging
-этого diff пока не выполнены.
+состояние неуспешного apply и сохранение group при atomic replace. Первый Linux CI
+PR #4 прошёл все jobs; compatibility-коммит требует повторного CI. Во временном
+локальном worktree с PR #3 разрешены merge conflicts для проверки: объединённые
+backend 153 passed/13 POSIX skipped, TypeScript, Vitest 6, Vite, Playwright 7 passed.
+Это проверка временного результата, не merge PR: при реальном объединении нужно
+перенести разрешение конфликтов в coordinator/API/Settings и повторить CI.
 
 ## Следующие задачи
 1. Прогнать Linux CI для ветки настроек/правил и отдельно проверить совместимость
@@ -290,7 +294,8 @@ DB backup и master-key backup хранятся раздельно. `docs/DEPLOY
 ## Changelog
 - 2026-10-15: отдельная ветка редактора v1.1.0 настроек/Rules и read-only
   `/clients`; новые typed agent file operations, sandbox tests и UI. Linux CI и
-  staging для этого изменения ещё требуются.
+  staging для этого изменения ещё требуются. Локальный совместный прогон с PR #3
+  выявил позиционный конфликт `coordinator.apply`; исправлен именованным вызовом.
 - 2026-10-09: client lifecycle: safe multi-inbound revoke/delete, attachment limits,
   global access intents, preflight drift/pending, compare-and-cancel preview и
   UI-пути восстановления. Миграция 0003; Linux/VPS не затронуты.
