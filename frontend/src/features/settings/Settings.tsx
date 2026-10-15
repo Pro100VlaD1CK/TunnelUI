@@ -1,4 +1,6 @@
 import { Alert, Descriptions, Tabs, Typography } from 'antd';
+import { Metrics } from './Metrics';
+import { TrustTunnelSettings } from './TrustTunnelSettings';
 
 const sections = ['Общие', 'TrustTunnel', 'Параметры клиентов', 'Метрики', 'Сертификаты', 'Безопасность', 'Резервные копии'];
 export function Settings() {
@@ -7,6 +9,6 @@ export function Settings() {
       { key: 'language', label: 'Язык', children: 'Русский' }, { key: 'host', label: 'Системный агент', children: 'Состояние выбранного входящего показано в разделе «Входящие»' },
       { key: 'theme', label: 'Тема', children: 'Переключается в верхней панели; сохраняется только на этом устройстве' },
       { key: 'scope', label: 'Доступно', children: 'Клиенты, входящие TrustTunnel, профили, операции и аудит' },
-    ]} /> : <Alert type="info" showIcon title={`${label}: настройка пока недоступна`} description={i === 5 ? 'В этой версии работают серверные сессии, CSRF и защита входа. Управление политиками безопасности будет добавлено позднее.' : 'Раздел запланирован для TrustTunnel; изменение параметров пока недоступно.'} /> }))} />
+    ]} /> : i === 1 ? <TrustTunnelSettings /> : i === 3 ? <Metrics /> : <Alert type="info" showIcon title={`${label}: настройка пока недоступна`} description={i === 5 ? 'В этой версии работают серверные сессии, CSRF и защита входа. Управление политиками безопасности будет добавлено позднее.' : 'Раздел запланирован для TrustTunnel; изменение параметров пока недоступно.'} /> }))} />
   </>;
 }

@@ -61,6 +61,15 @@ const messages: Record<string, string> = {
   recovery_required: 'Откат не завершён. Новые изменения заблокированы до восстановления.',
   idempotency_conflict: 'Повторный запрос не совпадает с исходной операцией.',
   operation_failed: 'Операция завершилась ошибкой. Проверьте состояние сервиса и журнал операции.',
+  unsupported_endpoint_version: 'Для изменения конфигурации требуется подтверждённая версия TrustTunnel 1.1.0.',
+  unsupported_config_field: 'Это поле не поддерживается безопасным редактором TrustTunnel.',
+  invalid_config_value: 'Значение настройки вне допустимого диапазона.',
+  unsupported_config_value: 'Текущее значение настройки не удалось прочитать.',
+  unsupported_rules_structure: 'Формат rules.toml содержит неподдерживаемые поля. Изменение заблокировано.',
+  invalid_rules: 'Проверьте CIDR, hex-префикс, маску и действие правила.',
+  no_config_changes: 'Изменений для применения нет.',
+  config_preview_changed: 'Конфигурация изменилась после просмотра. Просмотрите изменения ещё раз.',
+  too_many_rules: 'Превышено допустимое количество правил.',
 };
 export function errorText(error: unknown): string {
   return error instanceof ApiError ? messages[error.code] ?? 'Запрос не выполнен. Обновите данные и повторите.' : 'Нет связи с панелью. Проверьте подключение и повторите.';
