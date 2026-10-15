@@ -14,7 +14,7 @@ from tunnelui.security import create_key, password_hasher
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["migrate", "create-admin", "create-key"])
+    parser.add_argument("command", choices=["migrate", "create-admin", "create-key", "expiry-run"])
     args = parser.parse_args()
     settings = Settings()
     if args.command == "create-key":
@@ -29,6 +29,26 @@ def main():
         config.set_main_option("script_location", str(root / "migrations"))
         config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
         command.upgrade(config, "head")
+        return
+    if args.command == "expiry-run":
+        from tunnelui.main import create_app
+        from tunnelui.services.expiry import ExpiryScheduler
+
+        app = create_app(settings)
+        runtime = app.state.management
+        if runtime is None:
+            raise SystemExit("Managed TrustTunnel runtime is not configured")
+        try:
+            scheduler = ExpiryScheduler(runtime.coordinator)
+            if not scheduler.preview()["enabled"]:
+                print("Expiry scan disabled; no host operation requested")
+                return
+            runtime.coordinator.recover_all()
+            result = scheduler.run_once()
+            print(f"Expiry scan: {result['processed']} processed, "
+                  f"{result['succeeded']} confirmed, {result['errors']} unresolved")
+        finally:
+            app.state.engine.dispose()
         return
     engine, factory = database(settings.database_url)
     try:
