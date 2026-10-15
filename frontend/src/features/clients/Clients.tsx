@@ -10,6 +10,8 @@ import { ClientEditor } from './ClientEditor';
 import { ClientActionModal } from './ClientActionModal';
 import { AttachmentActionModal } from './AttachmentActionModal';
 import { AttachmentEditorModal } from './AttachmentEditorModal';
+import { PasswordRotationModal } from './PasswordRotationModal';
+import { clientStatus } from './clientStatus';
 
 const syncLabels: Record<Client['attachments'][number]['sync_state'], string> = {
   active: 'Применён', pending: 'Ожидает применения', conflict: 'Конфликт',
@@ -24,6 +26,7 @@ export function Clients() {
   const [action, setAction] = useState<{ client: Client; remove: boolean }>();
   const [attachmentAction, setAttachmentAction] = useState<{ client: Client; attachment: Client['attachments'][number]; detach: boolean }>();
   const [attachmentEditor, setAttachmentEditor] = useState<{ client: Client; attachment?: Client['attachments'][number] }>();
+  const [rotation, setRotation] = useState<{ client: Client; attachment: Client['attachments'][number] }>();
   const navigate = useNavigate();
   const query = useQuery({ queryKey: ['clients', search, filter, page], queryFn: () => api<Page<Client>>(`/clients?q=${encodeURIComponent(search)}&offset=${(page - 1) * 25}${filter !== 'all' ? `&enabled=${filter}` : ''}`) });
   useEffect(() => {
@@ -39,11 +42,14 @@ export function Clients() {
     <Typography.Paragraph type="secondary">Глобальное состояние клиента и фактически применённое состояние каждой привязки показаны отдельно. Метрики появятся после Phase 3.</Typography.Paragraph>
     <QueryState loading={query.isPending} error={query.error} retry={() => query.refetch()} />
     {query.data && <Table<Client> rowKey="id" size="small" scroll={{ x: 820 }} dataSource={query.data.items} pagination={{ current: page, total: query.data.total, pageSize: 25, showSizeChanger: false, onChange: setPage, showTotal: total => `Всего: ${total}` }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={search || filter !== 'all' ? 'По заданным условиям клиентов нет' : 'Добавьте первого клиента. Привязать VPN-доступ можно будет после импорта входящего.'} /> }} columns={[
-      { title: 'Статус', width: 120, render: (_, r) => <Tag color={!r.enabled ? undefined : r.expires_at && r.expires_at <= Date.now() / 1000 ? 'warning' : 'success'}>{!r.enabled ? 'Отключён' : r.expires_at && r.expires_at <= Date.now() / 1000 ? 'Истёк' : 'Включён'}</Tag> },
+      { title: 'Статус', width: 200, render: (_, r) => {
+        const { label, color } = clientStatus(r, Date.now() / 1000);
+        return <Tag color={color}>{label}</Tag>;
+      } },
       { title: 'Username', dataIndex: 'username', width: 160, ellipsis: true },
       { title: 'Имя', dataIndex: 'display_name', width: 180, ellipsis: true },
       { title: 'Входящие', width: 230, render: (_, row) => row.attachments.length ? <Space size={[4, 4]} wrap>{row.attachments.map(item => <Tag key={item.id} color={item.sync_state === 'active' ? 'success' : item.sync_state === 'pending' ? 'processing' : item.sync_state === 'error' || item.sync_state === 'conflict' ? 'error' : undefined}>{item.inbound_name} · {syncLabels[item.sync_state]}</Tag>)}</Space> : <Typography.Text type="secondary">Нет доступа</Typography.Text> },
-      { title: 'Истекает', width: 160, render: (_, r) => r.expires_at ? new Date(r.expires_at * 1000).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' }) : 'Без срока' },
+      { title: 'Истекает', width: 190, render: (_, r) => r.expires_at ? <><span>{new Date(r.expires_at * 1000).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })}</span><br /><Typography.Text type="secondary">{r.expires_at <= Date.now() / 1000 ? 'Срок прошёл' : `Осталось ${Math.max(1, Math.ceil((r.expires_at - Date.now() / 1000) / 86400))} дн.`}</Typography.Text></> : 'Без срока' },
       { title: '', width: 56, fixed: 'right', render: (_, r) => <Dropdown trigger={['click']} menu={{ items: [
         { key: 'edit', label: 'Редактировать', onClick: () => setEditor(current => ({ open: true, client: r, session: current.session + 1 })) },
         { key: 'attach', label: 'Добавить доступ', onClick: () => setAttachmentEditor({ client: r }) },
@@ -51,6 +57,7 @@ export function Clients() {
         { type: 'divider' }, { key: 'profile', label: 'QR / профиль', disabled: !r.attachments.some(item => item.applied_state === 'active'), onClick: () => navigate(`/profiles?client=${r.id}`) },
         ...r.attachments.flatMap(item => [
           { key: `limits-${item.id}`, label: `Ограничения · ${item.inbound_name}`, onClick: () => setAttachmentEditor({ client: r, attachment: item }) },
+          { key: `rotate-${item.id}`, label: `Сменить пароль · ${item.inbound_name}`, disabled: item.applied_state !== 'active' || item.sync_state !== 'active', onClick: () => setRotation({ client: r, attachment: item }) },
           { key: `toggle-${item.id}`, label: `${item.enabled ? 'Отключить' : 'Включить'} доступ · ${item.inbound_name}`, onClick: () => setAttachmentAction({ client: r, attachment: item, detach: false }) },
           { key: `detach-${item.id}`, danger: true, label: `Удалить доступ · ${item.inbound_name}`, onClick: () => setAttachmentAction({ client: r, attachment: item, detach: true }) },
         ]),
@@ -62,5 +69,6 @@ export function Clients() {
     {action && <ClientActionModal {...action} close={() => setAction(undefined)} />}
     {attachmentAction && <AttachmentActionModal {...attachmentAction} close={() => setAttachmentAction(undefined)} />}
     {attachmentEditor && <AttachmentEditorModal {...attachmentEditor} close={() => setAttachmentEditor(undefined)} />}
+    {rotation && <PasswordRotationModal {...rotation} close={() => setRotation(undefined)} />}
   </>;
 }
