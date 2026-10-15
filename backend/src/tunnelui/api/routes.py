@@ -1,4 +1,5 @@
 import json
+import time
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import func, select
@@ -10,14 +11,17 @@ from tunnelui.api.schemas import (
     AttachmentDetach,
     AttachmentState,
     ClientAccess,
+    ClientCredentials,
     ClientDelete,
     ClientInput,
     ClientOutput,
     ClientUpdate,
+    ExpiryEnabled,
     ExportRequest,
     FakeScenario,
     IdempotentAction,
     LoginInput,
+    PasswordRotation,
     PendingCancel,
 )
 from tunnelui.domain.errors import DomainError
@@ -27,8 +31,10 @@ from tunnelui.services import auth
 from tunnelui.services.attachments import AttachmentService
 from tunnelui.services.audit import record
 from tunnelui.services.client_access import ClientAccessService
+from tunnelui.services.client_credentials import ClientCredentialService
 from tunnelui.services.client_deletion import ClientDeletionService
 from tunnelui.services.clients import ClientService
+from tunnelui.services.expiry import ExpiryScheduler
 from tunnelui.services.operations import active_operation, operation_output
 from tunnelui.system.provider import SystemOperationError
 
@@ -112,7 +118,7 @@ def clients(q: str = Query("", max_length=160), enabled: bool | None = None,
     return {"items": [{
         **{key: getattr(row, key) for key in (
             "id", "username", "display_name", "enabled", "comment", "expires_at",
-            "created_at", "updated_at", "revision",
+            "expiry_managed", "created_at", "updated_at", "revision",
         )},
         "attachments": attachments.get(row.id, []),
     } for row in rows], "total": total}
@@ -148,6 +154,47 @@ def client_access(client_id: str, data: ClientAccess, request: Request,
     return ClientAccessService(
         management(request).coordinator, identity.username
     ).change(client_id, data.enabled, data.revision, data.idempotency_key)
+
+
+@router.get("/expiry/preview")
+def expiry_preview(request: Request, _=Depends(admin)):
+    return ExpiryScheduler(management(request).coordinator).preview()
+
+
+@router.put("/expiry/enabled")
+def expiry_enabled(data: ExpiryEnabled, request: Request, identity=Depends(admin)):
+    return ExpiryScheduler(management(request).coordinator).set_enabled(
+        data.enabled, data.fingerprint, identity.username
+    )
+
+
+@router.get("/expiry/attempts")
+def expiry_attempts(_=Depends(admin), db=Depends(db_session)):
+    from tunnelui.models import ExpiryAttempt
+
+    rows = db.scalars(select(ExpiryAttempt).order_by(
+        ExpiryAttempt.updated_at.desc()
+    ).limit(100)).all()
+    return {"items": [{key: getattr(row, key) for key in (
+        "id", "client_id", "inbound_id", "expires_at", "state", "attempts",
+        "next_attempt_at", "operation_id", "error_code", "updated_at",
+    )} for row in rows]}
+
+
+@router.post("/expiry/attempts/{attempt_id}/retry")
+def retry_expiry(attempt_id: str, request: Request, identity=Depends(admin)):
+    return ExpiryScheduler(management(request).coordinator).retry(
+        attempt_id, identity.username
+    )
+
+
+@router.put("/clients/{client_id}/credentials")
+def change_client_credentials(client_id: str, data: ClientCredentials, request: Request,
+                              identity=Depends(admin)):
+    return ClientCredentialService(
+        management(request).coordinator, identity.username
+    ).change(client_id, data.username, data.expires_at, data.display_name,
+             data.comment, data.revision, data.idempotency_key)
 
 
 @router.get("/inbounds")
@@ -242,6 +289,9 @@ def inbound_detail(inbound_id: str, request: Request, _=Depends(admin), db=Depen
             "max_http3_conns": attachment.max_http3_conns,
             "applied_max_http2_conns": attachment.applied_max_http2_conns,
             "applied_max_http3_conns": attachment.applied_max_http3_conns,
+            "applied_username": attachment.applied_username,
+            "applied_expires_at": attachment.applied_expires_at,
+            "applied_expired": attachment.applied_expired,
         } for attachment, client in attachments],
         "operations": [operation_output(item) for item in operations],
     }
@@ -292,6 +342,18 @@ def update_attachment(attachment_id: str, data: AttachmentState, request: Reques
             "max_http2_conns", "max_http3_conns"
         ) if name in data.model_fields_set},
     )
+    return {"operation": operation}
+
+
+@router.post("/attachments/{attachment_id}/rotate-password")
+def rotate_attachment_password(attachment_id: str, data: PasswordRotation,
+                               request: Request, identity=Depends(admin),
+                               db=Depends(db_session)):
+    runtime = management(request)
+    operation = AttachmentService(
+        db, identity.username, runtime.coordinator.box, runtime.coordinator
+    ).rotate_password(attachment_id, data.password.get_secret_value(),
+                      data.revision, data.idempotency_key)
     return {"operation": operation}
 
 
@@ -377,7 +439,18 @@ def export_profile(client_id: str, data: ExportRequest, request: Request,
     )).first()
     if not row:
         raise DomainError("active_profile_not_found", 404)
-    client, _attachment, inbound = row
+    client, attachment, inbound = row
+    if (inbound.config_state != "synced" or attachment.sync_state != "active"
+            or attachment.desired_state != "active" or not client.enabled
+            or (client.expiry_managed and client.expires_at is not None
+                and client.expires_at <= int(time.time()))
+            or attachment.applied_username != client.username
+            or attachment.applied_secret_ciphertext != attachment.secret_ciphertext
+            or attachment.applied_expires_at != client.expires_at
+            or attachment.applied_expiry_managed != client.expiry_managed):
+        raise DomainError("profile_pending_apply")
+    if runtime.coordinator.check_drift(inbound.id)["drift"]:
+        raise DomainError("drift_conflict")
     exported = runtime.exporter.export(client.username, inbound.public_address or "", data.format)
     return {"format": exported.format, "content": exported.content,
             "media_type": exported.media_type, "sandbox": request.app.state.sandbox is not None}

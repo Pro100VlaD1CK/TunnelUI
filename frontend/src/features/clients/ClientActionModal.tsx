@@ -18,7 +18,8 @@ export function ClientActionModal({ client, remove, close }: { client: Client; r
   const key = useRef(crypto.randomUUID());
   const [partial, setPartial] = useState<ActionResult>();
   const mutation = useMutation({ mutationFn: (): Promise<ActionResult | undefined> => {
-    const { id, created_at: _created, updated_at: _updated, ...values } = client;
+    const { id, created_at: _created, updated_at: _updated,
+      expiry_managed: _expiryManaged, attachments: _attachments, ...values } = client;
     if (remove) {
       if (!client.attachments.length) {
         return api<void>(`/clients/${id}?revision=${client.revision}`, { method: 'DELETE' })

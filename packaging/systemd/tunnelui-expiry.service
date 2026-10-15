@@ -1,0 +1,29 @@
+[Unit]
+Description=TunnelUI expiry scan (opt-in)
+After=tunnelui-agent.socket
+Requires=tunnelui-agent.socket
+
+[Service]
+Type=oneshot
+User=tunnelui
+Group=tunnelui
+WorkingDirectory=/opt/tunnelui
+EnvironmentFile=/etc/tunnelui/tunnelui.env
+ExecStart=/opt/tunnelui/.venv/bin/tunnelui expiry-run
+TimeoutStartSec=15min
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/tunnelui
+UMask=0077

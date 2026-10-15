@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 from tunnelui.domain.clients import ClientInput, ClientUpdate  # noqa: F401
 
@@ -20,6 +20,7 @@ class ClientOutput(ClientInput):
     created_at: int
     updated_at: int
     revision: int
+    expiry_managed: bool
 
 
 class ClientPage(BaseModel):
@@ -56,6 +57,31 @@ class AttachmentDetach(IdempotentAction):
 class ClientAccess(IdempotentAction):
     enabled: bool
     revision: int = Field(ge=1)
+
+
+class ClientCredentials(IdempotentAction):
+    username: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.@-]{0,63}$")
+    display_name: str = Field(min_length=1, max_length=160)
+    comment: str = Field(default="", max_length=4000)
+    expires_at: int | None = Field(default=None, ge=0, le=253402300799)
+    revision: int = Field(ge=1)
+
+    @field_validator("display_name")
+    @classmethod
+    def meaningful_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Display name must not be blank")
+        return value.strip()
+
+
+class PasswordRotation(IdempotentAction):
+    password: SecretStr = Field(min_length=12, max_length=1024)
+    revision: int = Field(ge=1)
+
+
+class ExpiryEnabled(StrictModel):
+    enabled: bool
+    fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
 class ClientDelete(IdempotentAction):

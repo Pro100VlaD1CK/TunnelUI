@@ -152,7 +152,7 @@ class TrustTunnelCoordinator:
                 username=client.username,
                 password=self.box.decrypt(attachment.secret_ciphertext),
                 enabled=client.enabled,
-                expires_at=client.expires_at,
+                expires_at=client.expires_at if client.expiry_managed else None,
                 max_http2_conns=attachment.max_http2_conns,
                 max_http3_conns=attachment.max_http3_conns,
             ))
@@ -166,7 +166,8 @@ class TrustTunnelCoordinator:
         return hashlib.sha256(f"{inbound_id}\0{kind}\0{key}".encode()).hexdigest()
 
     def apply(self, inbound_id: str, idempotency_key: str, admin: str,
-              kind: str = "credentials_apply") -> dict:
+              kind: str = "credentials_apply",
+              expected_expiry: tuple[str, int, int] | None = None) -> dict:
         with self.sessions() as db:
             inbound = db.get(Inbound, inbound_id)
             if not inbound or inbound.kind != "trusttunnel":
@@ -185,12 +186,40 @@ class TrustTunnelCoordinator:
                     raise DomainError("idempotency_conflict")
                 return operation_output(existing)
             with self.locks.acquire(inbound_id):
-                content, rendered_revisions = self._render_state(db, inbound_id)
-                parse_credentials(content)
                 operation_id = str(uuid.uuid4())
                 with environment.operation(operation_id):
+                    # The agent lock also serializes other backend processes. Refresh
+                    # the DB after acquiring it so a concurrent worker cannot replay
+                    # a stale render or create the same idempotent operation twice.
+                    db.rollback()
+                    inbound = db.get(Inbound, inbound_id)
+                    existing = db.scalar(select(Operation).where(
+                        Operation.idempotency_key == idempotency_key
+                    ))
+                    if existing:
+                        if existing.request_fingerprint != fingerprint:
+                            raise DomainError("idempotency_conflict")
+                        return operation_output(existing)
+                    if inbound.config_state == "recovery_required":
+                        raise DomainError("recovery_required")
                     if active_operation(db, inbound_id):
                         raise DomainError("operation_in_progress")
+                    if expected_expiry is not None:
+                        client_id, deadline, revision = expected_expiry
+                        client = db.get(Client, client_id)
+                        attachment = db.scalar(select(Attachment).where(
+                            Attachment.client_id == client_id,
+                            Attachment.inbound_id == inbound_id,
+                        ))
+                        if (not client or not attachment or not client.enabled
+                                or client.expires_at != deadline
+                                or client.revision != revision
+                                or deadline > int(time.time())):
+                            raise DomainError("expiry_stale")
+                        if attachment.applied_expired:
+                            raise DomainError("expiry_already_applied")
+                    content, rendered_revisions = self._render_state(db, inbound_id)
+                    parse_credentials(content)
                     try:
                         original = environment.snapshot()
                     except OSError:
@@ -347,6 +376,13 @@ class TrustTunnelCoordinator:
                 )
                 or (attachment.applied_client_enabled is not None
                     and client.enabled != attachment.applied_client_enabled)
+                or (attachment.applied_username is not None
+                    and client.username != attachment.applied_username)
+                or (attachment.applied_secret_ciphertext is not None
+                    and attachment.secret_ciphertext != attachment.applied_secret_ciphertext)
+                or (attachment.applied_expiry_managed is not None
+                    and (client.expires_at != attachment.applied_expires_at
+                         or client.expiry_managed != attachment.applied_expiry_managed))
             )
         changes = [{
             "attachment_id": attachment.id,
@@ -361,6 +397,12 @@ class TrustTunnelCoordinator:
             ],
             "desired_global_enabled": client.enabled,
             "applied_global_enabled": attachment.applied_client_enabled,
+            "applied_username": attachment.applied_username,
+            "desired_expires_at": client.expires_at,
+            "applied_expires_at": attachment.applied_expires_at,
+            "credential_change": (attachment.applied_secret_ciphertext is not None
+                                  and attachment.secret_ciphertext
+                                  != attachment.applied_secret_ciphertext),
         } for attachment, client in rows
             if is_pending(attachment, client)]
         global_client_ids = sorted({
@@ -446,6 +488,14 @@ class TrustTunnelCoordinator:
                 if attachment.applied_client_enabled is not None
                 and client.enabled != attachment.applied_client_enabled
             }
+            global_client_ids.update(
+                client.id for attachment, client in candidate_rows
+                if (attachment.applied_username is not None
+                    and client.username != attachment.applied_username)
+                or (attachment.applied_expiry_managed is not None
+                    and (client.expires_at != attachment.applied_expires_at
+                         or client.expiry_managed != attachment.applied_expiry_managed))
+            )
             affected_ids = {inbound_id}
             for client_id in global_client_ids:
                 affected_ids.update(db.scalars(select(Attachment.inbound_id).where(
@@ -507,6 +557,36 @@ class TrustTunnelCoordinator:
                                 else other.sync_state
                             )
                             other.updated_at = now()
+                identity_clients = {
+                    attachment.client_id for attachment in rows
+                    if (attachment.applied_username is not None
+                        and db.get(Client, attachment.client_id).username
+                        != attachment.applied_username)
+                    or (attachment.applied_expiry_managed is not None
+                        and (db.get(Client, attachment.client_id).expires_at
+                             != attachment.applied_expires_at
+                             or db.get(Client, attachment.client_id).expiry_managed
+                             != attachment.applied_expiry_managed))
+                }
+                for client_id in identity_clients:
+                    all_rows = db.scalars(select(Attachment).where(
+                        Attachment.client_id == client_id
+                    )).all()
+                    targets = {
+                        (row.applied_username, row.applied_expires_at,
+                         row.applied_expiry_managed) for row in all_rows
+                    }
+                    if len(targets) != 1 or any(value is None for value in (
+                        next(iter(targets))[0], next(iter(targets))[2]
+                    )):
+                        raise DomainError("pending_cancel_unsafe")
+                    username, expires_at, expiry_managed = next(iter(targets))
+                    client = db.get(Client, client_id)
+                    client.username = username
+                    client.expires_at = expires_at
+                    client.expiry_managed = expiry_managed
+                    client.revision += 1
+                    client.updated_at = now()
                 for attachment in rows:
                     if attachment.applied_state == "pending":
                         # A newly created attachment was never applied.
@@ -517,11 +597,20 @@ class TrustTunnelCoordinator:
                     attachment.sync_state = attachment.applied_state
                     attachment.max_http2_conns = attachment.applied_max_http2_conns
                     attachment.max_http3_conns = attachment.applied_max_http3_conns
+                    if attachment.applied_secret_ciphertext is not None:
+                        attachment.secret_ciphertext = attachment.applied_secret_ciphertext
                     attachment.revision += 1
                     attachment.updated_at = now()
                 if rows:
                     record_result(db, admin, "inbound.cancel_pending", "inbound",
                                   inbound_id, "success")
+                if inbound.config_state == "error" and not view["changed_files"]:
+                    try:
+                        if environment.provider.health(inbound_id):
+                            inbound.config_state = "synced"
+                            inbound.updated_at = now()
+                    except SystemOperationError:
+                        pass
                 db.commit()
                 return {"cancelled": len(rows), "changed_files": view["changed_files"]}
 
@@ -565,6 +654,13 @@ class TrustTunnelCoordinator:
                     )
                     or (attachment.applied_client_enabled is not None
                         and _client.enabled != attachment.applied_client_enabled)
+                    or (attachment.applied_username is not None
+                        and _client.username != attachment.applied_username)
+                    or (attachment.applied_secret_ciphertext is not None
+                        and attachment.secret_ciphertext != attachment.applied_secret_ciphertext)
+                    or (attachment.applied_expiry_managed is not None
+                        and (_client.expires_at != attachment.applied_expires_at
+                             or _client.expiry_managed != attachment.applied_expiry_managed))
                     for attachment, _client in rows
                 ):
                     raise DomainError("pending_changes_require_cancel")
@@ -590,6 +686,8 @@ class TrustTunnelCoordinator:
                 for username, credential in external.items():
                     attachment, _ = local[username]
                     attachment.secret_ciphertext = self.box.encrypt(credential.password)
+                    attachment.applied_secret_ciphertext = attachment.secret_ciphertext
+                    attachment.applied_username = username
                     attachment.max_http2_conns = credential.max_http2_conns
                     attachment.max_http3_conns = credential.max_http3_conns
                     attachment.applied_max_http2_conns = credential.max_http2_conns
@@ -693,6 +791,15 @@ class TrustTunnelCoordinator:
             attachment.applied_max_http2_conns = attachment.max_http2_conns
             attachment.applied_max_http3_conns = attachment.max_http3_conns
             attachment.applied_client_enabled = client.enabled
+            attachment.applied_username = client.username
+            attachment.applied_secret_ciphertext = attachment.secret_ciphertext
+            attachment.applied_expires_at = client.expires_at
+            attachment.applied_expiry_managed = client.expiry_managed
+            attachment.applied_expired = bool(
+                client.expiry_managed and client.expires_at is not None
+                and client.expires_at <= now() and client.enabled
+                and attachment.desired_state == "active" and attachment.enabled
+            )
             attachment.updated_at = now()
 
     def _mark_error(self, db: Session, inbound_id: str) -> None:
