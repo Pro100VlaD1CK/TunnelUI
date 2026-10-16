@@ -6,6 +6,7 @@ export interface ClientInput {
   expires_at: number | null;
 }
 export interface Client extends ClientInput {
+  expiry_managed: boolean;
   id: string;
   created_at: number;
   updated_at: number;
@@ -27,6 +28,10 @@ export interface Attachment {
   max_http3_conns: number | null;
   applied_max_http2_conns: number | null;
   applied_max_http3_conns: number | null;
+  applied_username: string | null;
+  applied_expires_at: number | null;
+  applied_expired: boolean | null;
+  credential_change_pending: boolean;
 }
 
 export interface Operation {

@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from tunnelui.agent.protocol import ProtocolError, decode_request
 from tunnelui.integrations.trusttunnel import source_hash
-from tunnelui.models import AuditEvent, Inbound, Operation
+from tunnelui.models import Attachment, AuditEvent, Inbound, Operation
 from tunnelui.services.configuration import ConfigurationService
 from tunnelui.services.coordinator import SandboxEnvironment, SimulatedCrash
 from tunnelui.services.runtime_metrics import RuntimeMetricsService
@@ -92,6 +92,38 @@ def test_config_content_never_enters_operation_or_audit(sandbox_authenticated, s
                             for column in AuditEvent.__table__.columns} for row in audit
                        ])
         assert "private-token-sentinel" not in stored
+
+
+def test_settings_apply_refuses_pending_credential_rotation(
+    sandbox_authenticated, sandbox_app
+):
+    inbound_id = adopt(sandbox_authenticated)
+    runtime = sandbox_app.state.sandbox
+    original_vpn = runtime.environment.files["vpn"].read_bytes()
+    restart_count = runtime.provider.actions.count(("restart", inbound_id))
+    with sandbox_app.state.sessions() as db:
+        attachment = db.scalar(select(Attachment).where(
+            Attachment.inbound_id == inbound_id
+        ))
+        attachment.secret_ciphertext = runtime.coordinator.box.encrypt(
+            "pending-rotation-secret"
+        )
+        attachment.sync_state = "pending"
+        attachment.revision += 1
+        db.commit()
+
+    preview = preview_settings(sandbox_authenticated, inbound_id, {
+        "ipv6_available": False,
+    }).json()
+    response = apply_settings(
+        sandbox_authenticated, inbound_id, {"ipv6_available": False},
+        preview["fingerprint"], key="settings-during-rotation-key",
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "pending_changes_require_cancel"
+    assert runtime.environment.files["vpn"].read_bytes() == original_vpn
+    assert runtime.provider.actions.count(("restart", inbound_id)) == restart_count
 
 
 def test_settings_rejects_invalid_unknown_drift_and_changed_preview(

@@ -27,7 +27,7 @@ fail closed с 503; скрытого fake fallback нет. Linux adoption уже
 
 ## Компоненты
 - `backend/src/tunnelui`: API, domain, services, repositories, integrations, system adapters.
-- `backend/migrations`: Alembic 0001–0003; схема не создаётся через `create_all`.
+- `backend/migrations`: Alembic 0001–0004; схема не создаётся через `create_all`.
 - `backend/tests`: temp directories, fakes и mocks; реальный systemd не вызывается.
 - `frontend/src`: app shell, shared API/types и features auth/inbounds/clients/profiles/audit/settings/rules.
 - `frontend/e2e`: Chromium-пути Phase 1/2, recovery, mobile и accessibility smoke checks.
@@ -39,7 +39,8 @@ fail closed с 503; скрытого fake fallback нет. Linux adoption уже
 
 ## Модель данных
 `Admin`, `AdminSession`, `Client`, `Inbound`, `Attachment`, `Operation`, `AuditEvent`,
-`AttachmentIntent`, `ClientAccessIntent`, `ClientDeletion`.
+`AttachmentIntent`, `ClientAccessIntent`, `ClientDeletion`, `CredentialIntent`,
+`ExpirySetting`, `ExpiryAttempt`.
 Client глобален; credential и connection limits принадлежат attachment. Attachment
 хранит encrypted password, desired/applied/sync state и revision. Operation хранит
 kind, state, idempotency key, request fingerprint, ожидаемые/результирующие hashes,
@@ -53,6 +54,11 @@ API token или private key. AuditEvent — отдельная сущность
 Миграция 0003 добавляет secret-free idempotency intents, replay удалений и снимок
 фактически применённых HTTP/2/3 limits и глобального enabled для каждого attachment.
 Intents не содержат credential, plaintext config или deep-link.
+Миграция 0004 сохраняет для каждого attachment подтверждённые username,
+зашифрованный password, expiry policy и факт отзыва по сроку. Старые сроки
+получают `expiry_managed=false`, scheduler — `enabled=false`; миграция не меняет
+файлы и не перезапускает TrustTunnel. `CredentialIntent` хранит keyed HMAC
+запроса и IDs; `ExpiryAttempt` — срок, попытку, cooldown и safe error.
 
 ## TrustTunnel integration
 Проверен официальный tag v1.1.0, commit `fab5b8353a19332f935fa30869307d37d4a898d1`.
@@ -134,9 +140,17 @@ TunnelUI HTTPS TCP 9443. Web работает как `tunnelui`, агент — 
   credentials render, apply, fake restart/health, durable Operation checkpoints,
   AuditEvent, drift, rollback, `needs_recovery` и recover, last-active-client guard,
   concurrent apply guard, Profiles и inbound-specific fake QR/deep-link/TOML export.
-- Attached client разрешает безопасное изменение display name/comment; username,
-  expiry заблокированы до отдельного apply workflow. Глобальное enabled теперь меняется
-  через idempotent per-inbound apply; частичный результат явно возвращается оператору.
+- Attached client меняет username и expiry через отдельный idempotent per-inbound
+  apply с проверкой applied metadata и явным partial result. Новая запись с
+  заданным сроком помечается managed; мигрированные сроки остаются inert до opt-in.
+  Глобальное enabled использует тот же принцип.
+  Password rotation выбирает attachment и сохраняет прежний зашифрованный секрет
+  до подтверждённого apply; export закрыт при pending/rollback.
+- UTC expiry показывает оставшееся время, приближение срока, просроченный, ожидающий
+  и подтверждённый отзыв отдельно. `tunnelui expiry-run` — разовый durable проход
+  для systemd timer: DB attempt, CAS/lease, deterministic Operation key, cooldown,
+  manual retry и проверка expiry/revision под agent lock. Preview и включение в
+  Settings явные; миграция и примерный timer не активируют автоматический отзыв.
 - Клиента с attachments можно полностью удалить одним подтверждением: сначала
   preflight каждого inbound, затем последовательный apply и проверка фактических
   credentials/hashes, и только после этого удаление DB-записи. Частичный отказ
@@ -169,29 +183,23 @@ TunnelUI HTTPS TCP 9443. Web работает как `tunnelui`, агент — 
   только на loopback; UI показывает недоступность и область счётчиков.
 
 ## Сейчас в работе
-Ветка `codex/trusttunnel-settings-rules` опубликована в draft PR #4; Linux CI
-`Checks` run #21 прошёл для кодового head `9ae8622` (backend, linux-agent,
-frontend/E2E). Последующие документальные коммиты не меняют runtime-код.
-PR #3 Credentials/Expiry прошёл свой CI, но находится в
-самостоятельной ветке и не входит в базу этой ветки. Совместное состояние обоих PR
-потребует отдельного integration regression после объединения. Bind address,
-TLS keys, listener protocols остаются read-only; для `vpn.toml`/`rules.toml`
-используется restart, а SIGHUP подтверждён только для TLS hosts.
-На Windows до публикации: Ruff pass; pytest 140 passed/13 POSIX skipped,
-TypeScript pass; Vitest 3 passed; Vite build pass; Playwright 6 passed, включая
-новый sandbox путь settings/rules и mobile 320/375/390. Impeccable detector —
-0 findings; ручной audit/harden/polish выявил и исправил no-op edit rules,
-состояние неуспешного apply и сохранение group при atomic replace. Во временном
-локальном worktree с PR #3 разрешены merge conflicts для проверки: объединённые
-backend 153 passed/13 POSIX skipped, TypeScript, Vitest 6, Vite, Playwright 7 passed.
-Это проверка временного результата, не merge PR: при реальном объединении нужно
-перенести разрешение конфликтов в coordinator/API/Settings и повторить CI.
+Интеграционная ветка объединяет draft PR #3 Credentials/Expiry и PR #4
+Settings/Rules/Metrics обычным merge без переписывания истории. Конфликты разрешены
+в общем coordinator/API/Settings: credential/expiry apply и typed `vpn`/`rules`
+apply используют один Operation journal и общую per-inbound/agent блокировку.
+Локальные проверки объединённого head и общий Linux CI выполняются в этом проходе;
+до публикации: Ruff pass; pytest 155 passed/13 POSIX skipped на Windows;
+TypeScript pass; Vitest 6 passed; Vite production build pass с известным Ant Design
+chunk warning; Playwright 7 passed, включая mobile 320/375/390/768. Общий Linux CI
+ещё должен подтвердить POSIX agent paths и итоговый merge head.
+Bind address, TLS keys, listener protocols остаются read-only; для
+`credentials.toml`, `vpn.toml` и `rules.toml` используется restart, а SIGHUP
+подтверждён только для TLS hosts. Expiry timer остаётся выключенным по умолчанию.
 
 ## Следующие задачи
-1. После фактического объединения PR #3 и PR #4 разрешить текстовые конфликты и
-   повторить общий Linux CI; отдельный временный локальный регресс уже прошёл.
-2. Отдельно согласовать и выполнить Debian staging acceptance `vpn`/`rules` apply,
-   file owner/group/mode, rollback/recovery и `/clients` без изменения production.
+1. Запустить и дождаться общего Linux CI объединённого состояния.
+2. Отдельно согласовать Debian 12 staging acceptance Credentials/Expiry и
+   Settings/Rules/Metrics, включая drift, rollback/recovery и права файлов.
 3. Certificate read-only detection, metrics enable с явным loopback guard,
    несколько managed instances в одной панели, backup retention.
 4. Installation/upgrade/rollback packaging и отдельный production gate.
@@ -207,8 +215,13 @@ backend 153 passed/13 POSIX skipped, TypeScript, Vitest 6, Vite, Playwright 7 pa
 - Полное удаление также последовательно применяет несколько inbounds: если часть уже
   отозвана, а другая не подтвердилась, клиент не удаляется. Для продолжения нужен
   новый idempotency key после разрешения ошибки; автоматической атомарности нет.
-- Expiry/username/rotation находятся в отдельном прошедшем CI PR #3; до объединения
-  веток этих возможностей нет в данном checkout. После объединения нужен регресс.
+- Expiry scheduler не включается после миграции: оператор предварительно смотрит
+  список, включает setting и отдельно устанавливает/включает timer. Debian timer,
+  crash replay и реальные время/права ещё не прошли staging acceptance.
+- Multi-inbound username/expiry apply последователен. При частичном результате
+  attachment имеют разные applied values; UI показывает pending/error и закрывает
+  неподтверждённый export. Оператор завершает apply-pending после устранения причины;
+  отмена при разных applied identity запрещена. Общего cross-inbound rollback нет.
 - Пустой `credentials.toml` не поддерживается TrustTunnel v1.1.0, поэтому последний
   active client нельзя отключить или отвязать без отдельного проверенного решения.
 - Fake exporter намеренно не создаёт реальный `tt://`; Linux exporter использует
@@ -274,12 +287,23 @@ backend 153 passed/13 POSIX skipped, TypeScript, Vitest 6, Vite, Playwright 7 pa
   с проверкой всех затронутых inbounds до удаления DB-строки, а не CASCADE delete.
   Отмена pending привязана к preview fingerprint и показывает влияние глобального
   enabled на другие inbounds. ADR-004/010 остаются действующими.
-- ADR-017 active (2026-10-15): редактирование TrustTunnel v1.1.0 ограничено
+- ADR-019 active (2026-10-16; номер устранён при интеграции): редактирование
+  TrustTunnel v1.1.0 ограничено
   проверенными параметрами и rules. Linux Agent принимает только typed `vpn`/`rules`,
   атомарно заменяет один файл под allowlisted lock после сравнения hashes всех
   managed файлов; coordinator переиспользует Operation и rollback/recovery.
   Metrics `/clients` остаётся read-only, запрашивается только с loopback literal,
   без сохранения IP/трафика. Это не persistent accounting и не quota.
+- ADR-017 active (2026-10-15): срок — policy TunnelUI, а не поле TrustTunnel
+  v1.1.0. Миграция 0004 не активирует старые сроки. Разовый CLI + timer работают
+  только после preview и явного включения; каждая попытка имеет durable lease,
+  cooldown и Operation key. Последний credential блокируется. Прежнее ожидание,
+  что один только renderer означает автоматический отзыв, **superseded**.
+- ADR-018 active (2026-10-15): username/expiry являются desired значениями Client,
+  а фактические username/expiry/password фиксируются per Attachment после health
+  и hash verification. Несколько inbound применяются по очереди; partial не
+  скрывается. Старый encrypted password удерживается до успеха rotation. Профиль
+  нельзя экспортировать, пока желаемое и применённое расходятся.
 Изменённые решения помечаются superseded и дополняются заменой, история не стирается.
 
 ## Deployment notes
@@ -293,10 +317,16 @@ DB backup и master-key backup хранятся раздельно. `docs/DEPLOY
 для текущего diff, а не разрешение на production install.
 
 ## Changelog
+- 2026-10-16: PR #3 и PR #4 объединены в интеграционной ветке обычным merge;
+  сохранены credential/expiry и settings/rules/metrics paths, единый coordinator,
+  блокировки, journal и recovery. Результаты общего CI фиксируются отдельно.
 - 2026-10-15: отдельная ветка редактора v1.1.0 настроек/Rules и read-only
   `/clients`; новые typed agent file operations, sandbox tests и UI. Linux CI
   прошёл; staging для этого изменения ещё требуется. Локальный совместный прогон с PR #3
   выявил позиционный конфликт `coordinator.apply`; исправлен именованным вызовом.
+- 2026-10-15: локально добавлены миграция 0004, safe username/expiry apply,
+  per-attachment password rotation, opt-in expiry-run/timer example, статусы,
+  Settings и профили, regression/E2E. Linux Agent/VPS не менялись.
 - 2026-10-09: client lifecycle: safe multi-inbound revoke/delete, attachment limits,
   global access intents, preflight drift/pending, compare-and-cancel preview и
   UI-пути восстановления. Миграция 0003; Linux/VPS не затронуты.

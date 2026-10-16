@@ -3,7 +3,9 @@
 ## Границы и владение
 TunnelUI владеет Client и его desired attachments. TrustTunnel managed inbound
 представляет один endpoint service. Другие VPN-системы вне scope. Один Client может иметь несколько attachments; разные
-passwords по inbound. Global enabled/expiry фильтруют credentials во время каждого apply.
+passwords по inbound. Global enabled фильтрует credentials; expiry фильтрует их
+после явного перехода клиента к управляемой политике срока. TrustTunnel v1.1.0
+не имеет отдельного серверного поля expiry.
 
 ## Слои
 API валидирует запросы и авторизует; services координируют use cases; repositories
@@ -90,6 +92,14 @@ fingerprint пароля — keyed HMAC, plaintext в intent нет. Повто�
 удаляются только после подтверждения всех файлов/hashes; partial оставляет запись,
 операции и явный путь восстановления. Это не общая транзакция нескольких служб.
 
+Миграция 0004 добавляет applied username/encrypted password/expiry policy/fact of
+expiry revocation к каждому attachment. Username/expiry изменяются через
+`ClientCredentialService`: unique/CAS, preflight каждого inbound, keyed-HMAC
+`CredentialIntent`, последовательные Operation и explicit partial outcome.
+Rotation меняет только выбранный attachment; предыдущий encrypted password
+сохраняется как applied до health/hash success или восстановления после rollback.
+Profile export требует совпадения desired/applied credential и отсутствия drift.
+
 `GET /inbounds/{id}/pending` показывает изменения, внешние файлы и влияние отмены
 глобального enabled на другие inbounds. Fingerprint включает revisions и ожидаемые
 hashes; `cancel-pending` повторно проверяет preview под process/agent locks и не
@@ -104,6 +114,14 @@ DB states: pending, preparing, backed_up, writing, applying, checking, succeeded
 rolling_back, rolled_back, failed, needs_recovery. Checkpoints commit перед каждой
 границей внешнего эффекта. Operation хранит только hashes и safe error codes; secret
 bytes находятся только в зашифрованной БД и private backup.
+
+Credential/expiry операции и replacement-операции `vpn`/`rules` используют тот же
+coordinator и одну блокировку inbound. Replacement допускает только typed file ID,
+отказывает при pending credential changes и не обновляет applied credential state.
+Expiry повторно проверяет deadline/revision внутри agent lock и отказывает при
+активной settings/rules Operation. Аргументы `replacement`, `request_fingerprint`
+и `expected_expiry` передаются именованно, чтобы расширение одного workflow не могло
+изменить смысл другого позиционным сдвигом.
 
 Перед replace coordinator проверяет hashes всех managed files после prepare;
 agent повторяет сравнение с ожидаемыми hashes прямо перед rename. При явном
@@ -128,15 +146,25 @@ agent повторяет сравнение с ожидаемыми hashes пр�
 после изменений. По сообщению владельца проекта, прежняя версия Linux adoption уже
 прошла ручную проверку на отдельном Debian staging, включая apply/rollback/export/VPN.
 
-## Expiry и sync (следующие этапы)
-UTC clock; durable scheduler периодически находит due attachments, группирует по
-inbound, генерирует credentials и ставит apply operation. DB disabled не равно
-effective disabled до successful apply. Последний active client v1.1.0 — блокируемый
-edge case с видимой ошибкой. Quota не реализуется без persistent accounting.
+## Expiry и sync
+`ExpirySetting.enabled=false` после миграции 0004, старые `expires_at` получают
+`expiry_managed=false`. Настройки показывают fingerprinted preview до opt-in.
+`tunnelui expiry-run` — разовый unprivileged CLI, вызываемый примерным systemd
+timer. Он не создаёт web background thread: находит due клиентов по UTC,
+фиксирует `ExpiryAttempt` с CAS lease и повторным cooldown, повторно проверяет
+client revision/deadline внутри agent lock и вызывает прежний ApplyCoordinator.
+Operation key детерминирован для попытки и переживает потерянный ответ. При отказе
+состояние и safe code видны оператору; manual retry только планирует следующий
+проход. Последний active credential v1.1.0 блокируется без dummy пользователя.
+Фактический отзыв обозначает `Attachment.applied_expired`; `Client.expires_at`
+сам по себе не доказывает, что доступ прекращён. Установка срока в будущем и
+его продление проходят через apply-aware service. Quota не реализована без
+persistent accounting. Timer и новый workflow требуют Linux CI/Debian staging.
 
 ## UI
 Hash routes для static serving. Query cache не хранит passwords. Login → Входящие.
 Таблицы плотные, empty state объясняет следующий безопасный шаг. Sandbox service
 status маркируется как тестовый контур; production status не симулируется. Profiles
 экспортируется по явно выбранному inbound, поэтому несколько attachments не создают
-неоднозначный QR. Partial apply ведёт прямо к журналу входящего. Ошибки остаются видимыми.
+неоднозначный QR. Partial apply ведёт прямо к журналу входящего. Mobile Settings
+использует компактный selector разделов, desktop сохраняет Ant Tabs. Ошибки видимы.

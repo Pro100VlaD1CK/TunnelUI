@@ -96,6 +96,14 @@ Profiles связывает каждую строку и export action с кон
 ручного копирования. Fake exporter всегда явно помечен как тестовый.
 При Linux CLI export UI показывает обычный профиль; текст не выдаёт sandbox QR за
 реальную ссылку. Наличие официального exporter не означает готовность production.
+Редактирование username/срока с привязками показывает все затронутые входящие и
+требует подтверждения apply; partial ведёт к Operation каждого inbound. Rotation
+выбирает конкретный attachment и после успеха предлагает новый профиль, так как
+старый пароль может перестать действовать. В списке клиентов различать срок,
+ожидающий отзыв, ошибку и подтверждённый отзыв; дата в форме — местная, сервер
+хранит UTC. Settings показывает opt-in preview сроков и ошибки попыток. На mobile
+разделы Settings выбираются компактным native select; desktop сохраняет Ant Tabs.
+Длинный заголовок modal переносится до кнопки закрытия, а таблицы скроллятся внутри.
 Drawer section headings используют единый 17px уровень; bare oversized h2 внутри
 операционных drawers не применять. На mobile wide tables остаются в собственном scroll.
 UI states: loading, empty, failed/retry, ready, submitting, validation error, disabled.

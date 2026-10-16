@@ -49,8 +49,9 @@ pnpm --dir frontend test
 pnpm --dir frontend build
 pnpm --dir frontend test:e2e
 ```
-E2E использует установленный Chrome (Playwright channel chrome) и port 8765,
-создаёт отдельную временную SQLite в .runtime и fixture admin test-admin с
+E2E использует установленный Chrome (Playwright channel chrome) и два изолированных
+loopback sandbox на ports 8765/8766 (второй — credential/expiry scenario),
+создаёт отдельные временные SQLite в .runtime и fixture admin test-admin с
 заведомо тестовым паролем из scripts/e2e_server.py. Production/admin DB не используется.
 Сервер теста только 127.0.0.1, access log отключён; Playwright останавливает его
 после тестов. При аварийном завершении Windows disposable temp directory может
@@ -74,6 +75,8 @@ Native engine binary gitignored; launcher при отсутствии может
 
 ## Linux boundary package (не инструкция для production install)
 `packaging/systemd/` содержит примерные web, agent и socket units;
+`tunnelui-expiry.service` и `.timer` — отдельный oneshot worker с пятиминутным
+интервалом, **не включённый автоматически**;
 `packaging/tmpfiles.d/tunnelui.conf` — runtime/private каталоги;
 `packaging/agent.toml.example` — root-owned managed registry;
 `packaging/tunnelui.env.example` — web environment. Это примеры в репозитории,
@@ -109,6 +112,27 @@ iPhone. Production TrustTunnel остаётся на TCP/UDP 443. Эти дан�
 Особенно сверить фактические unit ExecStart/WorkingDirectory, owner/mode, socket
 SO_PEERCRED, официальный CLI и health. Sample units не делают ветку production-ready.
 
+## Миграция 0004 и включение expiry (только будущая процедура)
+До обновления сделать согласованные backup SQLite и master key, проверить restore
+на копии, затем выполнить 0004 на копии БД и убедиться, что старые `expires_at`
+имеют `expiry_managed=false`, а `expiry_settings.enabled=false`. Миграция не
+перезаписывает credentials и не запускает TrustTunnel. Старый release после 0004
+должен использовать сохранённый pre-upgrade DB snapshot; понижение Alembic на
+работающей БД не является runbook rollback, так как оно удаляет историю новых
+applied/expiry state. Не смешивать backend и agent разных release.
+
+После отдельной staging проверки можно установить timer unit из того же release.
+Сначала в Settings → «Сроки доступа» просмотреть всех затрагиваемых клиентов,
+включая старые просроченные записи и последний активный credential. Включение
+настройки само не запускает worker. Только затем оператор отдельно включает
+`tunnelui-expiry.timer`; `Persistent=true` делает один catch-up после простоя.
+`tunnelui expiry-run` выполняется от `tunnelui`, через текущий root-owned agent,
+без root для web/worker. Если настройка выключена, CLI не вызывает host actions.
+Ошибки и cooldown доступны в Settings; «Повторить» планирует следующую попытку,
+не делает немедленный restart. Для остановки отключить timer и настройку;
+уже подтверждённо отозванный доступ не восстанавливается без явного продления.
+До staging acceptance не устанавливать и не включать timer на текущем VPS.
+
 ## Воспроизводимое обновление отдельного staging release (проект процедуры)
 
 Эта процедура описывает будущий операторский запуск, а не выполнялась Codex. До
@@ -116,6 +140,34 @@ SO_PEERCRED, официальный CLI и health. Sample units не делаю�
 Linux CI. Не переключать рабочий Git checkout in-place: подготовить новый каталог
 release из конкретного commit SHA рядом с работающим, собрать frontend и установить
 backend/agent из одного SHA. Сохранить manifest SHA, checksums пакета и миграции.
+
+Проверочный порядок для объединённой версии:
+
+1. Зафиксировать SHA и health текущего TunnelUI `53da595`, HTTPS 9443 и staging
+   TrustTunnel 8448; production 443 оставить вне теста.
+2. Создать согласованные защищённые копии SQLite 0003 и master key, не работая с
+   оригинальной DB в проверках.
+3. На копии выполнить 0003→0004, повторный upgrade, `PRAGMA integrity_check`,
+   сверить `alembic_version`, клиентов, attachments и выключенный expiry setting.
+4. Подготовить новый immutable worktree/release из точного прошедшего CI SHA.
+5. Установить locked Python dependencies и собрать frontend из того же SHA.
+6. Выполнить import/read-only smoke от UID `tunnelui`, включая static assets и БД.
+7. Подготовить отдельный набор version-pinned systemd overrides для web и agent;
+   реальные unit/registry/path/UID сверить до переключения.
+8. Контролируемо переключить только TunnelUI web/agent и сохранить обратимый путь
+   к прежнему release; TrustTunnel на 443/8448 этим шагом не перезапускать.
+9. Проверить HTTPS 9443, login, agent socket, SO_PEERCRED, версии backend/agent и
+   совпадение static asset SHA.
+10. На staging 8448 проверить username/expiry/password rotation, Profiles и
+    ручной expiry preview; timer оставить выключенным.
+11. На staging 8448 проверить Settings/Rules preview/apply, read-only metrics и
+    сохранение неизвестных TOML полей, owner/group/mode.
+12. Отдельно воспроизвести drift между preview/apply, restart/health failure,
+    rollback, потерянный IPC response и `needs_recovery`.
+13. Подтвердить, что production 443 не менялся и не перезапускался, а его hashes,
+    service state и клиентский доступ соответствуют исходному состоянию.
+14. Проверить, что `expiry_settings.enabled=false`, timer не enabled/active; включение
+    допускается только отдельным решением после просмотра затрагиваемых клиентов.
 
 Подготовить файлы с читаемыми для service UID режимами, а не наследовать `umask 077`
 у root Git checkout: parent directories должны иметь traversal для `tunnelui`, код
@@ -126,7 +178,7 @@ backend/agent из одного SHA. Сохранить manifest SHA, checksums 
 проверить по `docs/SECURITY.md`.
 
 До переключения снять согласованную копию SQLite и отдельную защищённую копию
-master key; проверить миграцию 0003 на копии DB. Откат к старой версии после миграции
+master key; проверить миграцию 0004 на копии DB. Откат к старой версии после миграции
 должен использовать совместимую pre-upgrade DB snapshot, если старый код не понимает
 новую схему. Подготовить version-pinned настройки `PYTHONPATH` одновременно для web
 и agent, плюс `TUNNELUI_STATIC_DIR` от того же release. После локальной проверки

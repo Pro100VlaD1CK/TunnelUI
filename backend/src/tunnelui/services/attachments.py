@@ -134,6 +134,33 @@ class AttachmentService:
         self.db.commit()
         return self.coordinator.apply(row.inbound_id, idempotency_key, self.admin, kind)
 
+    def rotate_password(self, attachment_id: str, password: str, revision: int,
+                        idempotency_key: str) -> dict:
+        kind = "credential_rotation"
+        fingerprint = self._fingerprint(kind, {
+            "attachment_id": attachment_id, "revision": revision, "password": password,
+        })
+        replay = self._replay(idempotency_key, kind, fingerprint)
+        if replay:
+            return replay[1]
+        row = self.db.get(Attachment, attachment_id)
+        if not row:
+            raise DomainError("attachment_not_found", 404)
+        if row.revision != revision:
+            raise DomainError("revision_conflict")
+        if row.desired_state != "active" or row.applied_state != "active":
+            raise DomainError("active_profile_not_found")
+        self._ensure_clean(row.inbound_id)
+        row.secret_ciphertext = self.box.encrypt(password)
+        row.sync_state = "pending"
+        row.revision += 1
+        row.updated_at = now()
+        self.coordinator._render(self.db, row.inbound_id)
+        self._intent(idempotency_key, row, kind, fingerprint)
+        record(self.db, self.admin, "credential.rotate", "attachment", row.id)
+        self.db.commit()
+        return self.coordinator.apply(row.inbound_id, idempotency_key, self.admin, kind)
+
     def detach(self, attachment_id: str, revision: int, idempotency_key: str):
         kind = "attachment_detach"
         fingerprint = self._fingerprint(kind, {
@@ -194,5 +221,12 @@ class AttachmentService:
                 "max_http3_conns": attachment.max_http3_conns,
                 "applied_max_http2_conns": attachment.applied_max_http2_conns,
                 "applied_max_http3_conns": attachment.applied_max_http3_conns,
+                "applied_username": attachment.applied_username,
+                "applied_expires_at": attachment.applied_expires_at,
+                "applied_expired": attachment.applied_expired,
+                "credential_change_pending": (
+                    attachment.applied_secret_ciphertext is not None
+                    and attachment.secret_ciphertext != attachment.applied_secret_ciphertext
+                ),
             })
         return result

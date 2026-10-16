@@ -16,6 +16,9 @@ Commit `fab5b8353a19332f935fa30869307d37d4a898d1`.
 - [Settings parser](https://github.com/TrustTunnel/TrustTunnel/blob/v1.1.0/lib/src/settings.rs):
   deserialize_clients требует array-of-tables; demangle_toml_string удаляет quotes/trim.
   Поэтому нулевой набор и непрозрачные credential transformations — отдельные риски.
+  Поля клиента в credentials v1.1.0 — username/password и optional HTTP/2/3
+  connection limits; server-side per-client expiry там нет. TunnelUI управляет
+  сроком через исключение credential, restart и подтверждённый apply.
 - [Metrics](https://github.com/TrustTunnel/TrustTunnel/blob/v1.1.0/METRICS.md):
   /clients array username/ip/sessions/inbound/outbound; 404 при per_client_metrics=false.
   ip произвольный наблюдаемый при нескольких connections. Lifetime в docs не доказательство

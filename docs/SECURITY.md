@@ -36,6 +36,13 @@ plaintext/salted-guessable digest. ClientDeletion, Operation и AuditEvent хр�
 Drift/pending preflight предотвращает случайное совместное применение чужих
 изменений. Отмена pending требует актуального preview fingerprint, учитывает другие
 inbounds глобального клиента и не меняет managed файлы.
+Миграция 0004 сохраняет applied secret только зашифрованным. Rotation пишет новый
+desired secret, удерживая старый applied secret до подтверждённого apply/health;
+списки/API операций и audit не раскрывают оба. `CredentialIntent` хранит keyed HMAC,
+`ExpiryAttempt` — только IDs, срок, safe code и cooldown. Старые сроки после
+миграции инертны; timer и настройка expiry по умолчанию выключены. Перед
+отзывом worker повторно проверяет deadline/revision под agent lock; ошибки видимы,
+повтор ограничен cooldown. Реальный Debian staging для этого изменения не проверен.
 Секретный master key и DB вместе позволяют decrypt; защищать отдельно и backup
 раздельно. Privileged endpoint binary экспортирует секретный stdout — не логировать.
 
@@ -91,7 +98,8 @@ tmpfiles заранее создаёт root-owned runtime/backup каталог�
   metadata re-import, drift, rollback/recovery и CLI export.
 - Для нового редактора отдельно проверить на Debian staging конфигурацию `vpn` и
   `rules`, владельца/группу/права после replace, restart/health и rollback/recovery.
-  Сопоставить PR настроек с отдельным PR Credentials/Expiry перед общим release.
+  Объединённый head должен одновременно пройти credential/expiry и settings/rules
+  сценарии; отдельные зелёные PR не заменяют эту проверку.
 - Проверить endpoint-specific health и QUIC с тестовым credential, если требуется
   подтверждение UDP/HTTP3; текущий probe подтверждает service/TCP/TLS, QUIC — unknown.
 - Сверить реальный systemd ExecStart/WorkingDirectory с root registry: текущий
@@ -103,8 +111,9 @@ tmpfiles заранее создаёт root-owned runtime/backup каталог�
 - Ограничение размера request до парсинга на reverse proxy, shared rate limit при
   масштабировании, безопасная доверенная proxy policy, HTTPS и firewall.
 - Протокол key rotation/recovery и backup retention; tamper resistance audit.
-- Expiry durable scheduler и visible failed jobs; attachment limit edit и apply UI
-  есть, password rotation и изменение username/expiry ещё требуют отдельного workflow.
+- Linux CI и Debian staging для migration 0004, expiry timer, username/rotation,
+  rollback, профилей и прав нового oneshot unit. Не включать timer при deploy
+  автоматически: сначала review preview и проверка backup/restore на копии БД.
 - Dependency vulnerability audit и staging acceptance на Debian 12.
 
 Нельзя считать это production hardening certificate. В текущем проходе доступ к
