@@ -32,7 +32,7 @@ const operationLabels: Record<string, string> = {
 };
 const accessLabels: Record<string, string> = { active: 'Активен', disabled: 'Отключён', detached: 'Отвязан', pending: 'Ожидает' };
 const syncLabels: Record<string, string> = { active: 'Применён', pending: 'Ожидает применения', conflict: 'Конфликт', error: 'Ошибка', disabled: 'Отключён' };
-const operationKinds: Record<string, string> = { attachment_create: 'Добавление доступа', attachment_update: 'Изменение доступа', attachment_detach: 'Отвязка клиента', client_access: 'Глобальный доступ клиента', restart: 'Перезапуск' };
+const operationKinds: Record<string, string> = { attachment_create: 'Добавление доступа', attachment_update: 'Изменение доступа', attachment_detach: 'Отвязка клиента', client_access: 'Глобальный доступ клиента', settings_apply: 'Настройки TrustTunnel', rules_apply: 'Правила TrustTunnel', restart: 'Перезапуск' };
 const errorLabels: Record<string, string> = { health_failed: 'Проверка здоровья не пройдена', restart_failed: 'Перезапуск не выполнен', rollback_failed: 'Откат не завершён', drift_conflict: 'Конфигурация изменена извне' };
 function pendingSummary(item: PendingPreview['changes'][number]) {
   const parts = [];
