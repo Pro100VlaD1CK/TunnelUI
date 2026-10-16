@@ -111,9 +111,10 @@ tmpfiles заранее создаёт root-owned runtime/backup каталог�
 - Ограничение размера request до парсинга на reverse proxy, shared rate limit при
   масштабировании, безопасная доверенная proxy policy, HTTPS и firewall.
 - Протокол key rotation/recovery и backup retention; tamper resistance audit.
-- Linux CI и Debian staging для migration 0004, expiry timer, username/rotation,
-  rollback, профилей и прав нового oneshot unit. Не включать timer при deploy
-  автоматически: сначала review preview и проверка backup/restore на копии БД.
+- Объединённый runtime SHA `35702f2` прошёл Linux CI; отдельно остаётся Debian
+  staging для migration 0004, expiry timer, username/rotation, rollback, профилей
+  и прав нового oneshot unit. Не включать timer при deploy автоматически: сначала
+  review preview и проверка backup/restore на копии БД.
 - Dependency vulnerability audit и staging acceptance на Debian 12.
 
 Нельзя считать это production hardening certificate. В текущем проходе доступ к

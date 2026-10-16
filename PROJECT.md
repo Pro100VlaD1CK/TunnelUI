@@ -187,17 +187,19 @@ TunnelUI HTTPS TCP 9443. Web работает как `tunnelui`, агент — 
 Settings/Rules/Metrics обычным merge без переписывания истории. Конфликты разрешены
 в общем coordinator/API/Settings: credential/expiry apply и typed `vpn`/`rules`
 apply используют один Operation journal и общую per-inbound/agent блокировку.
-Локальные проверки объединённого head и общий Linux CI выполняются в этом проходе;
-до публикации: Ruff pass; pytest 155 passed/13 POSIX skipped на Windows;
+Объединённый runtime-коммит `35702f2` опубликован в draft PR #4 поверх PR #3.
+GitHub Actions `Checks` run #25 прошёл: backend, Linux Agent и frontend/Playwright.
+Локально до публикации: Ruff pass; pytest 155 passed/13 POSIX skipped на Windows;
 TypeScript pass; Vitest 6 passed; Vite production build pass с известным Ant Design
-chunk warning; Playwright 7 passed, включая mobile 320/375/390/768. Общий Linux CI
-ещё должен подтвердить POSIX agent paths и итоговый merge head.
+chunk warning; Playwright 7 passed, включая mobile 320/375/390/768. Debian staging
+для объединённого состояния не выполнялся.
 Bind address, TLS keys, listener protocols остаются read-only; для
 `credentials.toml`, `vpn.toml` и `rules.toml` используется restart, а SIGHUP
 подтверждён только для TLS hosts. Expiry timer остаётся выключенным по умолчанию.
 
 ## Следующие задачи
-1. Запустить и дождаться общего Linux CI объединённого состояния.
+1. После разрешённого merge PR #3 вернуть base PR #4 на `phase4/linux-adoption`,
+   убедиться, что итоговый diff не изменился, и ещё раз дождаться Linux CI.
 2. Отдельно согласовать Debian 12 staging acceptance Credentials/Expiry и
    Settings/Rules/Metrics, включая drift, rollback/recovery и права файлов.
 3. Certificate read-only detection, metrics enable с явным loopback guard,
@@ -319,7 +321,8 @@ DB backup и master-key backup хранятся раздельно. `docs/DEPLOY
 ## Changelog
 - 2026-10-16: PR #3 и PR #4 объединены в интеграционной ветке обычным merge;
   сохранены credential/expiry и settings/rules/metrics paths, единый coordinator,
-  блокировки, journal и recovery. Результаты общего CI фиксируются отдельно.
+  блокировки, journal и recovery. Runtime SHA `35702f2` прошёл GitHub Actions
+  `Checks` run #25: backend, Linux Agent и frontend/Playwright.
 - 2026-10-15: отдельная ветка редактора v1.1.0 настроек/Rules и read-only
   `/clients`; новые typed agent file operations, sandbox tests и UI. Linux CI
   прошёл; staging для этого изменения ещё требуется. Локальный совместный прогон с PR #3
