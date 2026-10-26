@@ -9,10 +9,13 @@ from tunnelui.agent.locking import LockError, ProcessLocks
 from tunnelui.agent.protocol import (
     AgentRequest,
     CommitArguments,
+    CommitConfigArguments,
+    ConfigArguments,
     EmptyArguments,
     ExportArguments,
     OperationArguments,
     PrepareArguments,
+    PrepareConfigArguments,
     StrictModel,
 )
 from tunnelui.agent.registry import AgentRegistry, RegistryError
@@ -128,6 +131,20 @@ class AgentDispatcher:
                 self.files.restore_credentials(instance, operation_id)
             elif operation == "files.cleanup":
                 self.files.cleanup(instance, operation_id)
+            elif operation == "files.prepare_config":
+                prepare = _args(arguments, PrepareConfigArguments)
+                self.files.prepare_config(instance, operation_id,
+                                          prepare.file_id, prepare.content())
+            elif operation == "files.commit_config":
+                commit = _args(arguments, CommitConfigArguments)
+                self.files.commit_config(instance, operation_id,
+                                         commit.file_id, commit.expected_hashes)
+            elif operation == "files.restore_config":
+                config = _args(arguments, ConfigArguments)
+                self.files.restore_config(instance, operation_id, config.file_id)
+            elif operation == "files.cleanup_config":
+                config = _args(arguments, ConfigArguments)
+                self.files.cleanup_config(instance, operation_id, config.file_id)
             elif operation == "service.restart":
                 await self.systemd.restart(instance.service, self.service_timeout)
             elif operation == "service.reload":

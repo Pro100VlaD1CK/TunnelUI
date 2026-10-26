@@ -123,6 +123,30 @@ class LinuxAgentClient:
     def cleanup(self, managed_id: str, operation_id: str) -> None:
         self._operation(managed_id, "files.cleanup", operation_id)
 
+    def prepare_config(self, managed_id: str, operation_id: str,
+                       file_id: str, content: bytes) -> None:
+        self._call(managed_id, "files.prepare_config", {
+            "operation_id": operation_id, "file_id": file_id,
+            "content_b64": base64.b64encode(content).decode(),
+        })
+
+    def commit_config(self, managed_id: str, operation_id: str,
+                      file_id: str, expected_hashes: dict[str, str]) -> None:
+        self._call(managed_id, "files.commit_config", {
+            "operation_id": operation_id, "file_id": file_id,
+            "expected_hashes": expected_hashes,
+        })
+
+    def restore_config(self, managed_id: str, operation_id: str, file_id: str) -> None:
+        self._call(managed_id, "files.restore_config", {
+            "operation_id": operation_id, "file_id": file_id,
+        })
+
+    def cleanup_config(self, managed_id: str, operation_id: str, file_id: str) -> None:
+        self._call(managed_id, "files.cleanup_config", {
+            "operation_id": operation_id, "file_id": file_id,
+        })
+
     def describe(self, managed_id: str) -> dict[str, object]:
         return self._call(managed_id, "managed.describe", {})
 
