@@ -104,6 +104,29 @@ def test_secure_commit_refuses_external_edit_without_replacing_credentials(tmp_p
     files.cleanup(instance, operation_id)
 
 
+def test_secure_config_replace_drift_and_restore(tmp_path):
+    instance = make_instance(tmp_path)
+    files = SecureManagedFiles()
+    operation_id = str(uuid.uuid4())
+    original = files.snapshot(instance)
+    expected = {key: hashlib.sha256(value).hexdigest() for key, value in original.items()}
+    files.create_backup(instance, operation_id)
+    files.prepare_config(instance, operation_id, "vpn", b"changed vpn\n")
+    instance.files["rules"].write_bytes(b"external\n")
+    with pytest.raises(FileSecurityError, match="drift_conflict"):
+        files.commit_config(instance, operation_id, "vpn", expected)
+    assert instance.files["vpn"].read_bytes() == original["vpn"]
+    instance.files["rules"].write_bytes(original["rules"])
+    files.commit_config(instance, operation_id, "vpn", expected)
+    assert instance.files["vpn"].read_bytes() == b"changed vpn\n"
+    assert stat.S_IMODE(instance.files["vpn"].stat().st_mode) == 0o644
+    files.restore_config(instance, operation_id, "vpn")
+    assert instance.files["vpn"].read_bytes() == original["vpn"]
+    assert instance.files["rules"].read_bytes() == original["rules"]
+    with pytest.raises(FileSecurityError, match="invalid_file_id"):
+        files.prepare_config(instance, str(uuid.uuid4()), "credentials", b"invalid\n")
+
+
 def test_restore_after_crash_with_prepared_credentials(tmp_path):
     instance = make_instance(tmp_path)
     files = SecureManagedFiles()

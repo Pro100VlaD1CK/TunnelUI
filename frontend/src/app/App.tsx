@@ -5,7 +5,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError, errorText } from '../shared/api';
 import { QueryState } from '../shared/QueryState';
-import { PlannedFeature } from '../shared/PlannedFeature';
+import { Rules } from '../features/rules/Rules';
 import { Login } from '../features/auth/Login';
 import { Clients } from '../features/clients/Clients';
 import { Inbounds } from '../features/inbounds/Inbounds';
@@ -34,7 +34,7 @@ function SessionApp({ dark, toggleTheme }: { dark: boolean; toggleTheme: () => v
   return <Routes><Route element={<Shell dark={dark} toggleTheme={toggleTheme} username={me.data.username} logout={() => logout.mutate()} loggingOut={logout.isPending} />}>
     <Route path="/inbounds" element={<Inbounds />} /><Route path="/clients" element={<Clients />} />
     <Route path="/profiles" element={<Profiles />} />
-    <Route path="/rules" element={<PlannedFeature title="Правила" description="Редактирование упорядоченных правил TrustTunnel станет доступно после подключения безопасного применения конфигурации." />} />
+    <Route path="/rules" element={<Rules />} />
     <Route path="/settings" element={<Settings />} /><Route path="/audit" element={<Audit />} />
     <Route path="*" element={<Navigate to="/inbounds" replace />} />
   </Route></Routes>;

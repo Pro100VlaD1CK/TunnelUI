@@ -29,7 +29,7 @@ fail closed с 503; скрытого fake fallback нет. Linux adoption уже
 - `backend/src/tunnelui`: API, domain, services, repositories, integrations, system adapters.
 - `backend/migrations`: Alembic 0001–0004; схема не создаётся через `create_all`.
 - `backend/tests`: temp directories, fakes и mocks; реальный systemd не вызывается.
-- `frontend/src`: app shell, shared API/types и features auth/inbounds/clients/profiles/audit/settings.
+- `frontend/src`: app shell, shared API/types и features auth/inbounds/clients/profiles/audit/settings/rules.
 - `frontend/e2e`: Chromium-пути Phase 1/2, recovery, mobile и accessibility smoke checks.
 - `.agents/skills/impeccable`: project-local design/UX skill; Ant Design остаётся библиотекой компонентов.
 - `backend/src/tunnelui/agent`: versioned IPC, registry, OS lock, безопасные файлы,
@@ -77,8 +77,11 @@ Linux adoption не переписывает файлы и не перезапу
 
 Credentials считаются требующими restart. SIGHUP подтверждён только для TLS hosts.
 Официальный CLI contract: `binary vpn.toml hosts.toml -c USER -a ADDRESS --format
-deeplink|toml`; по сообщению владельца официальный export проверен на staging. Metrics
-и `/clients` относятся к Phase 3; listener по умолчанию только loopback.
+deeplink|toml`; по сообщению владельца официальный export проверен на staging.
+Редактор v1.1.0 меняет только allowlisted `vpn.toml` параметры и упорядоченные
+`rules.toml` правила; bind, TLS и протоколы пока read-only. `/clients` читается
+только при включённых per-client metrics через буквальный loopback IP; данные не
+сохраняются. Включение metrics listener через панель пока не реализовано.
 
 ## 3x-ui integration
 **Superseded:** прежний план внешней интеграции и read-only adapter отменены новым
@@ -172,27 +175,36 @@ TunnelUI HTTPS TCP 9443. Web работает как `tunnelui`, агент — 
   backup без restart/config write; по сообщению владельца, staging проверил создание
   клиента, apply/rollback, официальный TOML/deeplink/QR и iPhone VPN. Текущие
   regression-тесты проверяют повтор confirm, agent failure, drift, metadata refresh.
+- Ветка `codex/trusttunnel-settings-rules` от `phase4/linux-adoption`: чтение и
+  ограниченное редактирование подтверждённых параметров TrustTunnel v1.1.0,
+  упорядоченные CIDR/client_random_prefix Rules, preview/confirm, применение через
+  существующий Operation/backup/restart/health/rollback/recovery. Linux Agent принимает
+  только typed `vpn`/`rules` file IDs, без пути из HTTP. Read-only `/clients` доступен
+  только на loopback; UI показывает недоступность и область счётчиков.
 
 ## Сейчас в работе
-Локальный credential/expiry проход: миграция 0004, username/expiry apply,
-password rotation, opt-in durable expiry worker и UI. Существующие coordinator,
-journal/recovery и Linux Agent сохранены. Все операции выполнялись только на
-синтетических данных. В draft PR #3 Linux CI для кодового SHA `5c9a8a5` прошёл:
-backend, linux-agent и frontend/Playwright. Debian staging для этого изменения
-не запускался; каждый последующий push требует повторной проверки CI.
-На Windows: Ruff pass; pytest 140 passed, 12 Linux-only skipped, 1 upstream
-Starlette/httpx warning; TypeScript pass; Vite build pass (известный Ant chunk
-warning); Vitest 6 passed; Playwright 7 passed на двух изолированных sandbox.
-Impeccable detector: 0 findings; ручной audit/harden/polish исправил mobile
-confirmation title и навигацию Settings. Timer unit и реальный TrustTunnel для
-этого изменения не проверялись на staging.
+Интеграционная ветка объединяет draft PR #3 Credentials/Expiry и PR #4
+Settings/Rules/Metrics обычным merge без переписывания истории. Конфликты разрешены
+в общем coordinator/API/Settings: credential/expiry apply и typed `vpn`/`rules`
+apply используют один Operation journal и общую per-inbound/agent блокировку.
+Объединённый runtime-коммит `35702f2` опубликован в draft PR #4 поверх PR #3.
+GitHub Actions `Checks` run #25 прошёл: backend, Linux Agent и frontend/Playwright.
+Локально до публикации: Ruff pass; pytest 155 passed/13 POSIX skipped на Windows;
+TypeScript pass; Vitest 6 passed; Vite production build pass с известным Ant Design
+chunk warning; Playwright 7 passed, включая mobile 320/375/390/768. Debian staging
+для объединённого состояния не выполнялся.
+Bind address, TLS keys, listener protocols остаются read-only; для
+`credentials.toml`, `vpn.toml` и `rules.toml` используется restart, а SIGHUP
+подтверждён только для TLS hosts. Expiry timer остаётся выключенным по умолчанию.
 
 ## Следующие задачи
-1. Запустить Linux CI и повторить Debian 12 staging acceptance для текущих изменений:
-   drift, metadata re-import, agent failure, rollback/recovery, unit compatibility.
-2. Завершить оставшийся TrustTunnel scope: metrics `/clients`, Rules, certificate
-   read-only detection и поддержка нескольких managed instances в одной панели.
-3. Installation/upgrade/rollback packaging и отдельный production gate.
+1. После разрешённого merge PR #3 вернуть base PR #4 на `phase4/linux-adoption`,
+   убедиться, что итоговый diff не изменился, и ещё раз дождаться Linux CI.
+2. Отдельно согласовать Debian 12 staging acceptance Credentials/Expiry и
+   Settings/Rules/Metrics, включая drift, rollback/recovery и права файлов.
+3. Certificate read-only detection, metrics enable с явным loopback guard,
+   несколько managed instances в одной панели, backup retention.
+4. Installation/upgrade/rollback packaging и отдельный production gate.
 
 ## Известные ограничения
 - Sandbox host-management остаётся fake; Linux adapter и adoption, по сообщению
@@ -218,7 +230,9 @@ confirmation title и навигацию Settings. Timer unit и реальны�
   официальный CLI, результат подтверждён ручной staging-проверкой владельца.
 - Re-import поддерживает только неизменившийся набор username и отказывает при
   pending/recovery; explicit mapping UI нет. Изменения файлов не применяются молча.
-- Нет metrics/runtime traffic, rules editor, certificate management и backup retention.
+- Runtime metrics только read-only и только при уже включённом loopback listener;
+  постоянного traffic accounting/quota нет. Certificate management и backup retention
+  ещё нет. Редактор не меняет bind, TLS paths, listener protocols и metrics listener.
 - Vite сообщает о крупном eager Ant Design chunk (~1.23 MB raw); route splitting отложен.
 - Backend TestClient сообщает upstream deprecation warning Starlette/httpx.
 - Impeccable skill 4.3.1 имеет доступное обновление 4.5.1; оно не устанавливалось.
@@ -230,9 +244,9 @@ confirmation title и навигацию Settings. Timer unit и реальны�
   detection, journal API,
   backup retention; QUIC health обозначен `unverified`, а не healthy. IPC request ID
   не дедуплицирует повторное действие; durable idempotency принадлежит coordinator.
-- Linux-only tests пропускаются на Windows; GitHub Actions Linux job настроен, но
-  этот проход не запускал удалённый CI. По сообщению владельца, backend на VPS до
-  текущих изменений имел результат 114 passed, 1 warning.
+- Linux-only tests пропускаются на Windows; GitHub Actions Linux job для PR #4
+  прошёл успешно. По сообщению владельца,
+  backend на VPS до текущих изменений имел результат 114 passed, 1 warning.
 - Проверка hash у агента уменьшает окно гонки с внешним редактором, но не является
   межпроцессной блокировкой для ручного редактора вне TunnelUI: между сравнением
   файлов и atomic rename остаётся короткий TOCTOU интервал. Текущие изменения
@@ -275,6 +289,13 @@ confirmation title и навигацию Settings. Timer unit и реальны�
   с проверкой всех затронутых inbounds до удаления DB-строки, а не CASCADE delete.
   Отмена pending привязана к preview fingerprint и показывает влияние глобального
   enabled на другие inbounds. ADR-004/010 остаются действующими.
+- ADR-019 active (2026-10-16; номер устранён при интеграции): редактирование
+  TrustTunnel v1.1.0 ограничено
+  проверенными параметрами и rules. Linux Agent принимает только typed `vpn`/`rules`,
+  атомарно заменяет один файл под allowlisted lock после сравнения hashes всех
+  managed файлов; coordinator переиспользует Operation и rollback/recovery.
+  Metrics `/clients` остаётся read-only, запрашивается только с loopback literal,
+  без сохранения IP/трафика. Это не persistent accounting и не quota.
 - ADR-017 active (2026-10-15): срок — policy TunnelUI, а не поле TrustTunnel
   v1.1.0. Миграция 0004 не активирует старые сроки. Разовый CLI + timer работают
   только после preview и явного включения; каждая попытка имеет durable lease,
@@ -298,6 +319,14 @@ DB backup и master-key backup хранятся раздельно. `docs/DEPLOY
 для текущего diff, а не разрешение на production install.
 
 ## Changelog
+- 2026-10-16: PR #3 и PR #4 объединены в интеграционной ветке обычным merge;
+  сохранены credential/expiry и settings/rules/metrics paths, единый coordinator,
+  блокировки, journal и recovery. Runtime SHA `35702f2` прошёл GitHub Actions
+  `Checks` run #25: backend, Linux Agent и frontend/Playwright.
+- 2026-10-15: отдельная ветка редактора v1.1.0 настроек/Rules и read-only
+  `/clients`; новые typed agent file operations, sandbox tests и UI. Linux CI
+  прошёл; staging для этого изменения ещё требуется. Локальный совместный прогон с PR #3
+  выявил позиционный конфликт `coordinator.apply`; исправлен именованным вызовом.
 - 2026-10-15: локально добавлены миграция 0004, safe username/expiry apply,
   per-attachment password rotation, opt-in expiry-run/timer example, статусы,
   Settings и профили, regression/E2E. Linux Agent/VPS не менялись.
