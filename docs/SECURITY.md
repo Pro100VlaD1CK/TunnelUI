@@ -71,6 +71,12 @@ arbitrary paths/commands. stdout CLI может содержать пароль/
 неопределённый D-Bus outcome требуют operator review по Operation state.
 Для `files.commit_credentials` agent проверяет typed hash precondition всех managed
 файлов перед rename; явный drift не вызывает rollback поверх внешнего edit.
+Для `vpn`/`rules` действуют отдельные typed file IDs и тот же hash precondition:
+HTTP не может передать агенту путь или команду. Новый temp сохраняет owner, group и
+mode исходного файла; backup/restore используют проверенные descriptors и fsync.
+Неподтверждённая версия TrustTunnel и незнакомая структура rules блокируют запись.
+Read-only `/clients` допускается только с literal loopback IP при явном включении
+per-client metrics; чтение ограничено timeout и 2 MiB, IP/traffic не пишутся в БД.
 Перед restore coordinator также сравнивает текущие hashes с исходным и записанным
 состоянием; неизвестное состояние требует ручного recovery. Ручной редактор вне
 lock агента сохраняет короткое TOCTOU окно между hash check и rename.
@@ -90,6 +96,10 @@ tmpfiles заранее создаёт root-owned runtime/backup каталог�
   затем повторить Debian staging acceptance на отдельном TrustTunnel instance:
   socket/SO_PEERCRED, registry, D-Bus, unit sandboxing, file owners/modes,
   metadata re-import, drift, rollback/recovery и CLI export.
+- Для нового редактора отдельно проверить на Debian staging конфигурацию `vpn` и
+  `rules`, владельца/группу/права после replace, restart/health и rollback/recovery.
+  Объединённый head должен одновременно пройти credential/expiry и settings/rules
+  сценарии; отдельные зелёные PR не заменяют эту проверку.
 - Проверить endpoint-specific health и QUIC с тестовым credential, если требуется
   подтверждение UDP/HTTP3; текущий probe подтверждает service/TCP/TLS, QUIC — unknown.
 - Сверить реальный systemd ExecStart/WorkingDirectory с root registry: текущий
@@ -101,9 +111,10 @@ tmpfiles заранее создаёт root-owned runtime/backup каталог�
 - Ограничение размера request до парсинга на reverse proxy, shared rate limit при
   масштабировании, безопасная доверенная proxy policy, HTTPS и firewall.
 - Протокол key rotation/recovery и backup retention; tamper resistance audit.
-- Linux CI и Debian staging для migration 0004, expiry timer, username/rotation,
-  rollback, профилей и прав нового oneshot unit. Не включать timer при deploy
-  автоматически: сначала review preview и проверка backup/restore на копии БД.
+- Объединённый runtime SHA `35702f2` прошёл Linux CI; отдельно остаётся Debian
+  staging для migration 0004, expiry timer, username/rotation, rollback, профилей
+  и прав нового oneshot unit. Не включать timer при deploy автоматически: сначала
+  review preview и проверка backup/restore на копии БД.
 - Dependency vulnerability audit и staging acceptance на Debian 12.
 
 Нельзя считать это production hardening certificate. В текущем проходе доступ к

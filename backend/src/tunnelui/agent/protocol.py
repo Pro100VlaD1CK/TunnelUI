@@ -60,6 +60,38 @@ class CommitArguments(OperationArguments):
         return self
 
 
+class ConfigArguments(OperationArguments):
+    file_id: Literal["vpn", "rules"]
+
+
+class PrepareConfigArguments(ConfigArguments):
+    content_b64: str = Field(
+        min_length=1, max_length=((MAX_MANAGED_CONTENT_BYTES + 2) // 3) * 4
+    )
+
+    def content(self) -> bytes:
+        try:
+            value = base64.b64decode(self.content_b64, validate=True)
+        except ValueError as error:
+            raise ProtocolError("invalid_content_encoding") from error
+        if not value or len(value) > MAX_MANAGED_CONTENT_BYTES:
+            raise ProtocolError("invalid_managed_content")
+        return value
+
+
+class CommitConfigArguments(ConfigArguments):
+    expected_hashes: dict[str, str]
+
+    @model_validator(mode="after")
+    def valid_hashes(self):
+        if set(self.expected_hashes) != {"vpn", "hosts", "credentials", "rules"} or any(
+            not re.fullmatch(r"[0-9a-f]{64}", value)
+            for value in self.expected_hashes.values()
+        ):
+            raise ValueError("invalid expected hashes")
+        return self
+
+
 class ExportArguments(StrictModel):
     username: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}$")
     format: Literal["deeplink", "toml"]
@@ -73,6 +105,8 @@ class AgentRequest(StrictModel):
         "lock.acquire", "lock.release", "files.snapshot", "files.backup",
         "files.prepare_credentials", "files.commit_credentials",
         "files.restore_credentials", "files.cleanup", "service.status",
+        "files.prepare_config", "files.commit_config", "files.restore_config",
+        "files.cleanup_config",
         "service.restart", "service.reload", "health.probe", "profile.export",
         "managed.describe",
     ]
@@ -88,6 +122,10 @@ ARGUMENT_TYPES: dict[str, type[StrictModel]] = {
     "files.commit_credentials": CommitArguments,
     "files.restore_credentials": OperationArguments,
     "files.cleanup": OperationArguments,
+    "files.prepare_config": PrepareConfigArguments,
+    "files.commit_config": CommitConfigArguments,
+    "files.restore_config": ConfigArguments,
+    "files.cleanup_config": ConfigArguments,
     "service.status": EmptyArguments,
     "service.restart": OperationArguments,
     "service.reload": OperationArguments,

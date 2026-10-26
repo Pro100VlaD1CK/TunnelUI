@@ -141,6 +141,34 @@ Linux CI. Не переключать рабочий Git checkout in-place: по
 release из конкретного commit SHA рядом с работающим, собрать frontend и установить
 backend/agent из одного SHA. Сохранить manifest SHA, checksums пакета и миграции.
 
+Проверочный порядок для объединённой версии:
+
+1. Зафиксировать SHA и health текущего TunnelUI `53da595`, HTTPS 9443 и staging
+   TrustTunnel 8448; production 443 оставить вне теста.
+2. Создать согласованные защищённые копии SQLite 0003 и master key, не работая с
+   оригинальной DB в проверках.
+3. На копии выполнить 0003→0004, повторный upgrade, `PRAGMA integrity_check`,
+   сверить `alembic_version`, клиентов, attachments и выключенный expiry setting.
+4. Подготовить новый immutable worktree/release из точного прошедшего CI SHA.
+5. Установить locked Python dependencies и собрать frontend из того же SHA.
+6. Выполнить import/read-only smoke от UID `tunnelui`, включая static assets и БД.
+7. Подготовить отдельный набор version-pinned systemd overrides для web и agent;
+   реальные unit/registry/path/UID сверить до переключения.
+8. Контролируемо переключить только TunnelUI web/agent и сохранить обратимый путь
+   к прежнему release; TrustTunnel на 443/8448 этим шагом не перезапускать.
+9. Проверить HTTPS 9443, login, agent socket, SO_PEERCRED, версии backend/agent и
+   совпадение static asset SHA.
+10. На staging 8448 проверить username/expiry/password rotation, Profiles и
+    ручной expiry preview; timer оставить выключенным.
+11. На staging 8448 проверить Settings/Rules preview/apply, read-only metrics и
+    сохранение неизвестных TOML полей, owner/group/mode.
+12. Отдельно воспроизвести drift между preview/apply, restart/health failure,
+    rollback, потерянный IPC response и `needs_recovery`.
+13. Подтвердить, что production 443 не менялся и не перезапускался, а его hashes,
+    service state и клиентский доступ соответствуют исходному состоянию.
+14. Проверить, что `expiry_settings.enabled=false`, timer не enabled/active; включение
+    допускается только отдельным решением после просмотра затрагиваемых клиентов.
+
 Подготовить файлы с читаемыми для service UID режимами, а не наследовать `umask 077`
 у root Git checkout: parent directories должны иметь traversal для `tunnelui`, код
 быть доступен на чтение, исполняемые файлы — на исполнение. Проверить это именно

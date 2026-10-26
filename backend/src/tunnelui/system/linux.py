@@ -112,3 +112,30 @@ class LinuxManagedEnvironment:
             self.client.cleanup(self.registry_id, operation_id)
         except AgentClientError as error:
             raise OSError(error.code) from None
+
+    def prepare_config(self, operation_id: str, file_id: str, content: bytes) -> None:
+        try:
+            self.client.prepare_config(self.registry_id, operation_id, file_id, content)
+        except AgentClientError as error:
+            raise OSError(error.code) from None
+
+    def commit_config(self, operation_id: str, file_id: str,
+                      expected_hashes: dict[str, str]) -> None:
+        try:
+            self.client.commit_config(
+                self.registry_id, operation_id, file_id, expected_hashes
+            )
+        except AgentClientError as error:
+            raise OSError(error.code) from None
+
+    def restore_config(self, operation_id: str, file_id: str) -> None:
+        try:
+            self.client.restore_config(self.registry_id, operation_id, file_id)
+        except AgentClientError as error:
+            raise OSError(error.code) from None
+
+    def cleanup_config(self, operation_id: str, file_id: str) -> None:
+        try:
+            self.client.cleanup_config(self.registry_id, operation_id, file_id)
+        except AgentClientError as error:
+            raise OSError(error.code) from None
