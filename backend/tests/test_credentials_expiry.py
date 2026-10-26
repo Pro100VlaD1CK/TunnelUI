@@ -495,12 +495,26 @@ def test_migration_0004_keeps_legacy_expiry_opted_out(tmp_path):
     command.upgrade(config, "0004")
     command.upgrade(config, "0004")  # Re-running the upgrade must preserve existing rows.
     with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+        assert connection.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone() == ("0004",)
+        assert connection.execute("SELECT id, username FROM clients").fetchall() == [
+            ("client-1", "legacy")
+        ]
+        assert connection.execute(
+            "SELECT id, client_id, inbound_id FROM attachments"
+        ).fetchall() == [("attachment-1", "client-1", "inbound-1")]
         assert connection.execute("SELECT expiry_managed FROM clients").fetchone() == (0,)
         applied = connection.execute(
-            "SELECT applied_username, applied_secret_ciphertext, applied_expiry_managed, "
-            "applied_expired FROM attachments"
+            "SELECT secret_ciphertext, applied_username, applied_secret_ciphertext, "
+            "applied_expiry_managed, applied_expired FROM attachments"
         ).fetchone()
-        assert applied == ("legacy", "encrypted-fixture", 0, 0)
+        assert applied == ("encrypted-fixture", "legacy", "encrypted-fixture", 0, 0)
+        attachment_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(attachments)")
+        }
+        assert "password" not in attachment_columns
         assert connection.execute("SELECT enabled FROM expiry_settings").fetchone() == (0,)
 
 
@@ -525,3 +539,35 @@ def test_expiry_last_active_blocks_without_restart(sandbox_authenticated, sandbo
         attempt = db.scalar(select(ExpiryAttempt))
         assert attempt.state == "blocked"
         assert attempt.error_code == "empty_credentials_unsupported_v1_1_0"
+
+
+def test_expiry_refuses_active_rules_operation(sandbox_authenticated, sandbox_app):
+    inbound_id = adopt(sandbox_authenticated)
+    current = client(sandbox_authenticated)
+    deadline = int(time.time()) - 10
+    with sandbox_app.state.sessions() as db:
+        row = db.get(Client, current["id"])
+        row.expires_at = deadline
+        row.expiry_managed = True
+        db.add(Operation(
+            id="active-rules-operation", inbound_id=inbound_id, kind="rules_apply",
+            state="applying", idempotency_key="active-rules-operation-key",
+            request_fingerprint="rules-operation-fingerprint",
+            expected_hashes_json="{}", result_hashes_json="{}",
+        ))
+        db.commit()
+    view = sandbox_authenticated.get("/api/expiry/preview").json()
+    assert sandbox_authenticated.put("/api/expiry/enabled", json={
+        "enabled": True, "fingerprint": view["fingerprint"],
+    }).status_code == 200
+    runtime = sandbox_app.state.sandbox
+    restart_count = runtime.provider.actions.count(("restart", inbound_id))
+
+    result = ExpiryScheduler(runtime.coordinator).run_once()
+
+    assert result["errors"] == 1
+    assert runtime.provider.actions.count(("restart", inbound_id)) == restart_count
+    with sandbox_app.state.sessions() as db:
+        attempt = db.scalar(select(ExpiryAttempt))
+        assert attempt.state == "error"
+        assert attempt.error_code == "operation_in_progress"

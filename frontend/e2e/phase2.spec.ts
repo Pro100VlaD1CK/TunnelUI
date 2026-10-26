@@ -60,6 +60,41 @@ test('Phase 2 sandbox: adoption, apply, profile, drift, rollback and recovery', 
   await expect(adoption).not.toBeVisible();
   await expect(page.getByRole('cell', { name: 'TrustTunnel', exact: true }).first()).toBeVisible();
 
+  await page.getByRole('link', { name: 'Настройки', exact: true }).click();
+  await page.getByRole('tab', { name: 'TrustTunnel' }).click();
+  await expect(page.getByText('Listen (только чтение)')).toBeVisible();
+  await page.getByRole('switch', { name: 'IPv6 доступен' }).click();
+  await page.getByRole('button', { name: 'Просмотреть изменения' }).click();
+  const settingsConfirm = page.getByRole('dialog', { name: 'Применить настройки TrustTunnel?' });
+  await expect(settingsConfirm).toContainText('vpn.toml');
+  await settingsConfirm.getByRole('button', { name: 'Создать backup и применить' }).click();
+  await expect(settingsConfirm).toBeHidden();
+  await expect(page.getByRole('switch', { name: 'IPv6 доступен' })).not.toBeChecked();
+  await page.getByRole('tab', { name: 'Метрики' }).click();
+  await expect(page.getByText('Метрики не включены в vpn.toml')).toBeVisible();
+
+  await page.getByRole('link', { name: 'Правила', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Правила' })).toBeVisible();
+  await page.getByRole('button', { name: 'Добавить правило' }).click();
+  const ruleEditor = page.getByRole('dialog', { name: 'Добавить правило' });
+  await ruleEditor.getByLabel('CIDR').fill('192.0.2.0/24');
+  await ruleEditor.getByRole('button', { name: 'Сохранить в черновик' }).click();
+  await expect(ruleEditor).toBeHidden();
+  await expect(page.getByRole('cell', { name: '192.0.2.0/24' })).toBeVisible();
+  await page.getByRole('button', { name: 'Просмотреть изменения' }).click();
+  const rulesConfirm = page.getByRole('dialog', { name: 'Применить правила TrustTunnel?' });
+  await expect(rulesConfirm).toContainText('rules.toml');
+  await rulesConfirm.getByRole('button', { name: 'Создать backup и применить' }).click();
+  await expect(rulesConfirm).toBeHidden();
+  await page.getByRole('row', { name: /192\.0\.2\.0\/24/ }).getByRole('button', { name: 'Изменить' }).click();
+  const unchangedRule = page.getByRole('dialog', { name: 'Изменить правило' });
+  await unchangedRule.getByRole('button', { name: 'Сохранить в черновик' }).click();
+  await expect(unchangedRule).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Просмотреть изменения' })).toBeDisabled();
+  for (const width of [320, 375, 390]) await expectNoPageOverflow(page, width);
+  await page.screenshot({ path: 'test-results/rules-mobile.png', fullPage: true, animations: 'disabled' });
+  await page.setViewportSize({ width: 1440, height: 960 });
+
   await page.getByRole('link', { name: 'Клиенты', exact: true }).click();
   await expect(page.getByRole('cell', { name: 'sandbox-alice', exact: true }).first()).toBeVisible();
   await page.getByRole('button', { name: 'Действия: sandbox-alice' }).click();

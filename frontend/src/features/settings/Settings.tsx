@@ -1,6 +1,8 @@
 import { Alert, Descriptions, Tabs, Typography } from 'antd';
 import { useState } from 'react';
 import { ExpirySettings } from './ExpirySettings';
+import { Metrics } from './Metrics';
+import { TrustTunnelSettings } from './TrustTunnelSettings';
 
 const sections = ['Общие', 'TrustTunnel', 'Параметры клиентов', 'Сроки доступа', 'Метрики', 'Сертификаты', 'Безопасность', 'Резервные копии'];
 export function Settings() {
@@ -14,6 +16,6 @@ export function Settings() {
       { key: 'language', label: 'Язык', children: 'Русский' }, { key: 'host', label: 'Системный агент', children: 'Состояние выбранного входящего показано в разделе «Входящие»' },
       { key: 'theme', label: 'Тема', children: 'Переключается в верхней панели; сохраняется только на этом устройстве' },
       { key: 'scope', label: 'Доступно', children: 'Клиенты, входящие TrustTunnel, профили, операции и аудит' },
-    ]} /> : i === 3 ? <ExpirySettings /> : <Alert type="info" showIcon title={`${label}: настройка пока недоступна`} description={i === 6 ? 'В этой версии работают серверные сессии, CSRF и защита входа. Управление политиками безопасности будет добавлено позднее.' : 'Раздел запланирован для TrustTunnel; изменение параметров пока недоступно.'} /> }))} />
+     ]} /> : i === 1 ? <TrustTunnelSettings /> : i === 3 ? <ExpirySettings /> : i === 4 ? <Metrics /> : <Alert type="info" showIcon title={`${label}: настройка пока недоступна`} description={i === 6 ? 'В этой версии работают серверные сессии, CSRF и защита входа. Управление политиками безопасности будет добавлено позднее.' : 'Раздел запланирован для TrustTunnel; изменение параметров пока недоступно.'} /> }))} />
   </>;
 }

@@ -51,6 +51,11 @@ class ManagedEnvironment(Protocol):
     def commit_credentials(self, operation_id: str, expected_hashes: dict[str, str]) -> None: ...
     def restore_credentials(self, operation_id: str) -> None: ...
     def cleanup(self, operation_id: str) -> None: ...
+    def prepare_config(self, operation_id: str, file_id: str, content: bytes) -> None: ...
+    def commit_config(self, operation_id: str, file_id: str,
+                      expected_hashes: dict[str, str]) -> None: ...
+    def restore_config(self, operation_id: str, file_id: str) -> None: ...
+    def cleanup_config(self, operation_id: str, file_id: str) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -111,6 +116,38 @@ class SandboxEnvironment:
         )
         candidate.unlink(missing_ok=True)
 
+    def prepare_config(self, operation_id: str, file_id: str, content: bytes) -> None:
+        if file_id not in {"vpn", "rules"}:
+            raise DomainError("invalid_file_id")
+        self._prepared[f"{operation_id}:{file_id}"] = prepare_atomic(
+            self.files[file_id], content, operation_id
+        )
+
+    def commit_config(self, operation_id: str, file_id: str,
+                      expected_hashes: dict[str, str]) -> None:
+        if file_id not in {"vpn", "rules"}:
+            raise DomainError("invalid_file_id")
+        if {key: source_hash(value) for key, value in self.snapshot().items()} != expected_hashes:
+            raise SystemOperationError("drift_conflict")
+        commit_atomic(self.files[file_id], self._prepared.pop(f"{operation_id}:{file_id}"))
+
+    def restore_config(self, operation_id: str, file_id: str) -> None:
+        if file_id not in {"vpn", "rules"}:
+            raise DomainError("invalid_file_id")
+        backup = self.backup_root / operation_id / file_id
+        atomic_replace(self.files[file_id], backup.read_bytes())
+
+    def cleanup_config(self, operation_id: str, file_id: str) -> None:
+        if file_id not in {"vpn", "rules"}:
+            raise DomainError("invalid_file_id")
+        temp = self._prepared.pop(f"{operation_id}:{file_id}", None)
+        if temp:
+            temp.unlink(missing_ok=True)
+        candidate = self.files[file_id].parent / (
+            f".tunnelui-{operation_id}-{self.files[file_id].name}"
+        )
+        candidate.unlink(missing_ok=True)
+
 
 class TrustTunnelCoordinator:
     """Durable apply coordinator; privileged effects stay behind an environment."""
@@ -165,9 +202,19 @@ class TrustTunnelCoordinator:
     def _fingerprint(inbound_id: str, kind: str, key: str) -> str:
         return hashlib.sha256(f"{inbound_id}\0{kind}\0{key}".encode()).hexdigest()
 
+    @staticmethod
+    def _operation_file(kind: str) -> str:
+        return {"settings_apply": "vpn", "rules_apply": "rules"}.get(kind, "credentials")
+
     def apply(self, inbound_id: str, idempotency_key: str, admin: str,
               kind: str = "credentials_apply",
+              replacement: tuple[str, bytes] | None = None,
+              request_fingerprint: str | None = None,
               expected_expiry: tuple[str, int, int] | None = None) -> dict:
+        file_id = replacement[0] if replacement else "credentials"
+        if replacement and (file_id not in {"vpn", "rules"}
+                            or self._operation_file(kind) != file_id):
+            raise DomainError("invalid_file_id")
         with self.sessions() as db:
             inbound = db.get(Inbound, inbound_id)
             if not inbound or inbound.kind != "trusttunnel":
@@ -177,7 +224,9 @@ class TrustTunnelCoordinator:
             if inbound.config_state == "recovery_required":
                 raise DomainError("recovery_required")
             environment = self.environment(inbound)
-            fingerprint = self._fingerprint(inbound_id, kind, idempotency_key)
+            fingerprint = request_fingerprint or self._fingerprint(
+                inbound_id, kind, idempotency_key
+            )
             existing = db.scalar(select(Operation).where(
                 Operation.idempotency_key == idempotency_key
             ))
@@ -204,22 +253,28 @@ class TrustTunnelCoordinator:
                         raise DomainError("recovery_required")
                     if active_operation(db, inbound_id):
                         raise DomainError("operation_in_progress")
-                    if expected_expiry is not None:
-                        client_id, deadline, revision = expected_expiry
-                        client = db.get(Client, client_id)
-                        attachment = db.scalar(select(Attachment).where(
-                            Attachment.client_id == client_id,
-                            Attachment.inbound_id == inbound_id,
-                        ))
-                        if (not client or not attachment or not client.enabled
-                                or client.expires_at != deadline
-                                or client.revision != revision
-                                or deadline > int(time.time())):
-                            raise DomainError("expiry_stale")
-                        if attachment.applied_expired:
-                            raise DomainError("expiry_already_applied")
-                    content, rendered_revisions = self._render_state(db, inbound_id)
-                    parse_credentials(content)
+                    if replacement:
+                        pending, _ = self._pending_view(db, inbound, environment)
+                        if pending["changes"]:
+                            raise DomainError("pending_changes_require_cancel")
+                        content, rendered_revisions = replacement[1], {}
+                    else:
+                        if expected_expiry is not None:
+                            client_id, deadline, revision = expected_expiry
+                            client = db.get(Client, client_id)
+                            attachment = db.scalar(select(Attachment).where(
+                                Attachment.client_id == client_id,
+                                Attachment.inbound_id == inbound_id,
+                            ))
+                            if (not client or not attachment or not client.enabled
+                                    or client.expires_at != deadline
+                                    or client.revision != revision
+                                    or deadline > int(time.time())):
+                                raise DomainError("expiry_stale")
+                            if attachment.applied_expired:
+                                raise DomainError("expiry_already_applied")
+                        content, rendered_revisions = self._render_state(db, inbound_id)
+                        parse_credentials(content)
                     try:
                         original = environment.snapshot()
                     except OSError:
@@ -252,9 +307,12 @@ class TrustTunnelCoordinator:
                     self._interrupt("after_backup")
                     changed = False
                     try:
-                        environment.prepare_credentials(operation.id, content)
+                        if replacement:
+                            environment.prepare_config(operation.id, file_id, content)
+                        else:
+                            environment.prepare_credentials(operation.id, content)
                         operation.result_hashes_json = json.dumps({
-                            **current_hashes, "credentials": source_hash(content),
+                            **current_hashes, file_id: source_hash(content),
                         })
                         transition(db, operation, "writing")
                         self._interrupt("after_temp_write")
@@ -266,7 +324,10 @@ class TrustTunnelCoordinator:
                         changed = True
                         # A lost agent reply after rename leaves the replace outcome
                         # unknown. Treat the boundary as changed and use the backup.
-                        environment.commit_credentials(operation.id, current_hashes)
+                        if replacement:
+                            environment.commit_config(operation.id, file_id, current_hashes)
+                        else:
+                            environment.commit_credentials(operation.id, current_hashes)
                         transition(db, operation, "applying")
                         self._interrupt("after_replace")
                         environment.provider.restart(inbound_id)
@@ -289,7 +350,10 @@ class TrustTunnelCoordinator:
                             changed = False
                         if not changed:
                             try:
-                                environment.cleanup(operation.id)
+                                if replacement:
+                                    environment.cleanup_config(operation.id, file_id)
+                                else:
+                                    environment.cleanup(operation.id)
                             except OSError:
                                 inbound.config_state = "recovery_required"
                                 inbound.updated_at = now()
@@ -322,7 +386,8 @@ class TrustTunnelCoordinator:
                     inbound.hashes_json = operation.result_hashes_json
                     inbound.config_state = "synced"
                     inbound.updated_at = now()
-                    self._mark_applied(db, inbound_id, rendered_revisions)
+                    if not replacement:
+                        self._mark_applied(db, inbound_id, rendered_revisions)
                     db.commit()
                     transition(db, operation, "succeeded")
                     record_result(db, admin, "config.apply", "inbound", inbound_id,
@@ -817,6 +882,7 @@ class TrustTunnelCoordinator:
 
     def _rollback(self, db: Session, inbound: Inbound, operation: Operation,
                   environment: ManagedEnvironment, admin: str, cause: str) -> dict:
+        file_id = self._operation_file(operation.kind)
         if operation.state != "rolling_back":
             transition(db, operation, "rolling_back", cause)
         self._interrupt("during_rollback")
@@ -829,13 +895,17 @@ class TrustTunnelCoordinator:
             written = hashes(operation.result_hashes_json)
             if any(
                 current.get(key) != value
-                for key, value in expected.items() if key != "credentials"
-            ) or current.get("credentials") not in {
-                expected.get("credentials"), written.get("credentials")
+                for key, value in expected.items() if key != file_id
+            ) or current.get(file_id) not in {
+                expected.get(file_id), written.get(file_id)
             }:
                 raise SystemOperationError("rollback_drift_conflict")
-            environment.cleanup(operation.id)
-            environment.restore_credentials(operation.id)
+            if file_id == "credentials":
+                environment.cleanup(operation.id)
+                environment.restore_credentials(operation.id)
+            else:
+                environment.cleanup_config(operation.id, file_id)
+                environment.restore_config(operation.id, file_id)
             environment.provider.restart(inbound.id)
             if not environment.provider.health(inbound.id):
                 raise SystemOperationError("rollback_health_failed")
@@ -890,7 +960,11 @@ class TrustTunnelCoordinator:
                     key: source_hash(value) for key, value in environment.snapshot().items()
                 }
                 expected = hashes(operation.expected_hashes_json)
-                environment.cleanup(operation.id)
+                file_id = self._operation_file(operation.kind)
+                if file_id == "credentials":
+                    environment.cleanup(operation.id)
+                else:
+                    environment.cleanup_config(operation.id, file_id)
                 if operation.state in {"pending", "preparing"} or (
                     operation.state in {"backed_up", "writing"} and current == expected
                 ):

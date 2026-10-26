@@ -84,7 +84,10 @@ class SecureManagedFiles:
             )
             try:
                 os.fchmod(descriptor, stat.S_IMODE(current.st_mode))
-                if os.fstat(descriptor).st_uid != instance.owner_uid:
+                prepared_stat = os.fstat(descriptor)
+                if (prepared_stat.st_uid, prepared_stat.st_gid) != (
+                    instance.owner_uid, current.st_gid
+                ):
                     os.fchown(descriptor, instance.owner_uid, current.st_gid)
                 _write_all(descriptor, content)
                 os.fsync(descriptor)
@@ -162,6 +165,114 @@ class SecureManagedFiles:
         with self._parent(instance, path) as parent_fd:
             try:
                 os.unlink(_prepared_name(operation_id), dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+            os.fsync(parent_fd)
+
+    def prepare_config(self, instance: ManagedInstance, operation_id: str,
+                       file_id: str, content: bytes) -> None:
+        _operation_id(operation_id)
+        _config_id(file_id)
+        if not content or len(content) > MAX_MANAGED_FILE_BYTES:
+            raise FileSecurityError("invalid_managed_content")
+        path = instance.files[file_id]
+        with self._parent(instance, path) as parent_fd:
+            current_fd = self._open_managed_fd(instance, file_id, parent_fd)
+            try:
+                current = os.fstat(current_fd)
+            finally:
+                os.close(current_fd)
+            name = _config_prepared_name(operation_id, file_id)
+            descriptor = os.open(
+                name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | _cloexec(),
+                0o600, dir_fd=parent_fd,
+            )
+            try:
+                os.fchmod(descriptor, stat.S_IMODE(current.st_mode))
+                prepared_stat = os.fstat(descriptor)
+                if (prepared_stat.st_uid, prepared_stat.st_gid) != (
+                    instance.owner_uid, current.st_gid
+                ):
+                    os.fchown(descriptor, instance.owner_uid, current.st_gid)
+                _write_all(descriptor, content)
+                os.fsync(descriptor)
+            except BaseException:
+                os.close(descriptor)
+                os.unlink(name, dir_fd=parent_fd)
+                raise
+            else:
+                os.close(descriptor)
+            os.fsync(parent_fd)
+
+    def commit_config(self, instance: ManagedInstance, operation_id: str,
+                      file_id: str, expected_hashes: dict[str, str]) -> None:
+        _operation_id(operation_id)
+        _config_id(file_id)
+        if set(expected_hashes) != set(FILE_IDS) or any(
+            not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
+            for value in expected_hashes.values()
+        ):
+            raise FileSecurityError("invalid_expected_hashes")
+        actual = {
+            key: hashlib.sha256(self._read_managed(instance, key)).hexdigest()
+            for key in FILE_IDS
+        }
+        if actual != expected_hashes:
+            raise FileSecurityError("drift_conflict")
+        path = instance.files[file_id]
+        with self._parent(instance, path) as parent_fd:
+            current_fd = self._open_managed_fd(instance, file_id, parent_fd)
+            os.close(current_fd)
+            prepared = _config_prepared_name(operation_id, file_id)
+            temp_fd = os.open(
+                prepared, os.O_RDONLY | os.O_NOFOLLOW | _cloexec(), dir_fd=parent_fd,
+            )
+            try:
+                self._validate_regular_fd(temp_fd, instance.owner_uid)
+            finally:
+                os.close(temp_fd)
+            os.replace(prepared, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            os.fsync(parent_fd)
+
+    def restore_config(self, instance: ManagedInstance, operation_id: str,
+                       file_id: str) -> None:
+        _operation_id(operation_id)
+        _config_id(file_id)
+        root_fd = self._open_directory(instance.backup_root, instance.owner_uid, private=True)
+        try:
+            backup_fd = os.open(
+                operation_id, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | _cloexec(),
+                dir_fd=root_fd,
+            )
+            try:
+                self._validate_directory_fd(backup_fd, instance.owner_uid, private=True)
+                source = os.open(
+                    file_id, os.O_RDONLY | os.O_NOFOLLOW | _cloexec(), dir_fd=backup_fd,
+                )
+                try:
+                    self._validate_regular_fd(source, instance.owner_uid)
+                    content = _read_bounded(source)
+                finally:
+                    os.close(source)
+            finally:
+                os.close(backup_fd)
+        finally:
+            os.close(root_fd)
+        self.cleanup_config(instance, operation_id, file_id)
+        self.prepare_config(instance, operation_id, file_id, content)
+        self.commit_config(instance, operation_id, file_id, {
+            key: hashlib.sha256(value).hexdigest()
+            for key, value in self.snapshot(instance).items()
+        })
+
+    def cleanup_config(self, instance: ManagedInstance, operation_id: str,
+                       file_id: str) -> None:
+        _operation_id(operation_id)
+        _config_id(file_id)
+        path = instance.files[file_id]
+        with self._parent(instance, path) as parent_fd:
+            try:
+                os.unlink(_config_prepared_name(operation_id, file_id), dir_fd=parent_fd)
             except FileNotFoundError:
                 pass
             os.fsync(parent_fd)
@@ -285,6 +396,15 @@ def _operation_id(value: str) -> None:
 
 def _prepared_name(operation_id: str) -> str:
     return f".tunnelui-{operation_id}-credentials.tmp"
+
+
+def _config_id(value: str) -> None:
+    if value not in {"vpn", "rules"}:
+        raise FileSecurityError("invalid_file_id")
+
+
+def _config_prepared_name(operation_id: str, file_id: str) -> str:
+    return f".tunnelui-{operation_id}-{file_id}.tmp"
 
 
 def _cloexec() -> int:
