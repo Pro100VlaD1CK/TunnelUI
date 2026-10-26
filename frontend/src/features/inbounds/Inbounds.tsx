@@ -48,7 +48,7 @@ export function Inbounds() {
         { key: 'clients', label: 'Открыть клиентов', onClick: () => navigate('/clients') },
         { key: 'review', label: 'Открыть проверку изменений', onClick: () => setDetail(row.id) },
       ] }}><Button type="text" aria-label={`Действия: ${row.name}`} icon={<MoreOutlined />} /></Dropdown> },
-    ]} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<><strong>Нет импортированных входящих</strong><p>Найдите локальную sandbox-конфигурацию, проверьте preview и подтвердите импорт.</p><Button type="primary" onClick={() => setAdoption(true)}>Найти TrustTunnel</Button></>} /> }} />}
+    ]} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<><strong>Нет импортированных входящих</strong><p>Проверьте настроенный экземпляр TrustTunnel и подтвердите импорт.</p><Button type="primary" disabled={!query.data.adoption_available} onClick={() => setAdoption(true)}>Найти TrustTunnel</Button></>} /> }} />}
     <AdoptionFlow open={adoption} close={() => setAdoption(false)} done={() => { setAdoption(false); query.refetch(); }} />
     <InboundDetails inboundId={detail} close={() => setDetail(undefined)} changed={() => query.refetch()} />
   </>;

@@ -13,23 +13,28 @@ React, TypeScript, Vite, Ant Design, TanStack Query. Без Jinja UI.
 Он выдаёт, изменяет и отзывает доступ и проверяет фактическое состояние применения.
 
 ## Product Purpose
-Единое управление клиентами TrustTunnel и внешних inbound 3x-ui с безопасным
+Независимая панель управления исключительно TrustTunnel с безопасным
 изменением существующей установки. Успех — понятное эффективное состояние доступа
 и возможность восстановить прежнюю конфигурацию после неуспешного apply.
 
 ## Operating Context
-Уже работающий Debian 12 с TrustTunnel v1.1.0 и 3x-ui v3.8.5. Доступ к production
-и deployment не разрешены текущей задачей. Desktop — основной рабочий контекст,
+Уже работающий Debian 12 с TrustTunnel v1.1.0. По сообщению владельца проекта,
+отдельный staging-экземпляр проверен вручную; этот проход работает только с локальными
+исходниками и не подключается к серверу. Desktop — основной рабочий контекст,
 mobile — поддерживаемый web viewport. Обычный масштаб клиентов пока не подтверждён;
 списки имеют server-side pagination, 25 строк по умолчанию.
 
 ## Capabilities and Constraints
 Входящие → Клиенты → Профили → Правила → Настройки → Аудит. Dashboard отсутствует.
-Один Client может иметь несколько inbound. TrustTunnel управляется напрямую через
-ограниченный агент, Hysteria2 через 3x-ui API, Mihomo через upstream subscription.
+Один Client может иметь доступ к нескольким экземплярам TrustTunnel. Управление
+выполняется через ограниченный root-owned агент; web backend не работает от root.
 Нельзя менять working services, открывать metrics наружу, показывать secrets в
 списках, обещать quota или credentials hot reload. Initial adoption read-only до
 подтверждения. Deferred функции явно обозначаются как не реализованные.
+Срок доступа — политика TunnelUI: истечение в БД не означает подтверждённый отзыв
+TrustTunnel. Автоматическое прекращение старого доступа включается только после
+предварительного просмотра и явного решения администратора; последний активный
+credential не удаляется обходным фиктивным пользователем.
 
 ## Brand Commitments
 Рабочее имя TunnelUI. Русский основной язык. Light/dark. UX-reference 3x-ui:
@@ -39,7 +44,8 @@ sidebar, плотные таблицы, быстрые действия, editing
 
 ## Evidence on Hand
 Подробный brief пользователя, version-pinned official sources в docs/RESEARCH.md.
-Live server metrics и live service status не получены. Не фабриковать данные.
+Результаты ручной проверки staging предоставлены владельцем проекта; Codex в этом
+проходе их не воспроизводил. Live metrics и persistent traffic accounting не проверены.
 
 ## Product Principles
 - Плотность информации вместе с читаемостью.

@@ -100,11 +100,21 @@ class SandboxAdoptionService:
                     db.flush()
                     db.add(Attachment(client_id=client.id, inbound_id=inbound.id,
                                       secret_ciphertext=box.encrypt(credential.password),
+                                      applied_username=credential.username,
                                       max_http2_conns=credential.max_http2_conns,
                                       max_http3_conns=credential.max_http3_conns,
+                                      applied_max_http2_conns=credential.max_http2_conns,
+                                      applied_max_http3_conns=credential.max_http3_conns,
+                                      applied_client_enabled=True,
                                       enabled=True, desired_state="active",
                                       applied_state="active", sync_state="active"))
                 record(db, admin, "inbound.adopt", "inbound", inbound.id)
+                for row in db.scalars(select(Attachment).where(
+                    Attachment.inbound_id == inbound.id
+                )).all():
+                    row.applied_secret_ciphertext = row.secret_ciphertext
+                    row.applied_expiry_managed = True
+                    row.applied_expired = False
                 db.commit()
             except IntegrityError:
                 db.rollback()

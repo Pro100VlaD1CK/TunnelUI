@@ -1,4 +1,6 @@
+import hashlib
 import os
+import re
 import stat
 import uuid
 from contextlib import contextmanager
@@ -7,6 +9,7 @@ from pathlib import Path
 from tunnelui.agent.registry import FILE_IDS, ManagedInstance
 
 MAX_MANAGED_FILE_BYTES = 4 * 1024 * 1024
+MAX_BINARY_BYTES = 64 * 1024 * 1024
 
 
 class FileSecurityError(Exception):
@@ -93,8 +96,23 @@ class SecureManagedFiles:
                 os.close(descriptor)
             os.fsync(parent_fd)
 
-    def commit_credentials(self, instance: ManagedInstance, operation_id: str) -> None:
+    def commit_credentials(
+        self, instance: ManagedInstance, operation_id: str,
+        expected_hashes: dict[str, str] | None = None,
+    ) -> None:
         _operation_id(operation_id)
+        if expected_hashes is not None:
+            if (set(expected_hashes) != set(FILE_IDS) or any(
+                not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
+                for value in expected_hashes.values()
+            )):
+                raise FileSecurityError("invalid_expected_hashes")
+            actual = {
+                key: hashlib.sha256(self._read_managed(instance, key)).hexdigest()
+                for key in FILE_IDS
+            }
+            if actual != expected_hashes:
+                raise FileSecurityError("drift_conflict")
         path = instance.files["credentials"]
         with self._parent(instance, path) as parent_fd:
             current_fd = self._open_managed_fd(instance, "credentials", parent_fd)
@@ -157,7 +175,12 @@ class SecureManagedFiles:
                 dir_fd=parent_fd,
             )
             try:
-                info = self._validate_regular_fd(descriptor, instance.owner_uid)
+                info = self._validate_regular_fd(
+                    descriptor,
+                    instance.owner_uid,
+                    max_bytes=MAX_BINARY_BYTES,
+                    size_error="binary_too_large",
+                )
                 if not info.st_mode & stat.S_IXUSR:
                     raise FileSecurityError("binary_not_executable")
                 yield descriptor, parent_fd, info
@@ -236,14 +259,20 @@ class SecureManagedFiles:
         return descriptor
 
     @staticmethod
-    def _validate_regular_fd(descriptor: int, owner_uid: int, credentials: bool = False):
+    def _validate_regular_fd(
+        descriptor: int,
+        owner_uid: int,
+        credentials: bool = False,
+        max_bytes: int = MAX_MANAGED_FILE_BYTES,
+        size_error: str = "managed_file_too_large",
+    ):
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != owner_uid:
             raise FileSecurityError("unsafe_managed_file")
         if info.st_mode & 0o022 or (credentials and info.st_mode & 0o077):
             raise FileSecurityError("unsafe_file_mode")
-        if info.st_size > MAX_MANAGED_FILE_BYTES:
-            raise FileSecurityError("managed_file_too_large")
+        if info.st_size > max_bytes:
+            raise FileSecurityError(size_error)
         return info
 
 

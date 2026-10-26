@@ -110,14 +110,21 @@ class LinuxAgentClient:
             "content_b64": base64.b64encode(content).decode(),
         })
 
-    def commit_credentials(self, managed_id: str, operation_id: str) -> None:
-        self._operation(managed_id, "files.commit_credentials", operation_id)
+    def commit_credentials(
+        self, managed_id: str, operation_id: str, expected_hashes: dict[str, str]
+    ) -> None:
+        self._call(managed_id, "files.commit_credentials", {
+            "operation_id": operation_id, "expected_hashes": expected_hashes,
+        })
 
     def restore_credentials(self, managed_id: str, operation_id: str) -> None:
         self._operation(managed_id, "files.restore_credentials", operation_id)
 
     def cleanup(self, managed_id: str, operation_id: str) -> None:
         self._operation(managed_id, "files.cleanup", operation_id)
+
+    def describe(self, managed_id: str) -> dict[str, object]:
+        return self._call(managed_id, "managed.describe", {})
 
     def status(self, managed_id: str) -> dict[str, object]:
         return self._call(managed_id, "service.status", {})

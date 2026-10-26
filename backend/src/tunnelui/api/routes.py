@@ -1,4 +1,5 @@
 import json
+import time
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import func, select
@@ -10,13 +11,18 @@ from tunnelui.api.schemas import (
     AttachmentDetach,
     AttachmentState,
     ClientAccess,
+    ClientCredentials,
+    ClientDelete,
     ClientInput,
     ClientOutput,
     ClientUpdate,
+    ExpiryEnabled,
     ExportRequest,
     FakeScenario,
     IdempotentAction,
     LoginInput,
+    PasswordRotation,
+    PendingCancel,
 )
 from tunnelui.domain.errors import DomainError
 from tunnelui.models import Attachment, AuditEvent, Client, Inbound, Operation, now
@@ -24,7 +30,11 @@ from tunnelui.repositories.clients import ClientRepository
 from tunnelui.services import auth
 from tunnelui.services.attachments import AttachmentService
 from tunnelui.services.audit import record
+from tunnelui.services.client_access import ClientAccessService
+from tunnelui.services.client_credentials import ClientCredentialService
+from tunnelui.services.client_deletion import ClientDeletionService
 from tunnelui.services.clients import ClientService
+from tunnelui.services.expiry import ExpiryScheduler
 from tunnelui.services.operations import active_operation, operation_output
 from tunnelui.system.provider import SystemOperationError
 
@@ -43,6 +53,14 @@ def sandbox(request: Request):
     if runtime is None:
         raise DomainError("sandbox_unavailable", 503)
     return runtime
+
+
+def adoption(request: Request):
+    runtime = management(request)
+    service = getattr(runtime, "adoption", None)
+    if service is None:
+        raise DomainError("management_unavailable", 503)
+    return service
 
 
 def set_cookie(response: Response, request: Request, token: str, age: int):
@@ -100,7 +118,7 @@ def clients(q: str = Query("", max_length=160), enabled: bool | None = None,
     return {"items": [{
         **{key: getattr(row, key) for key in (
             "id", "username", "display_name", "enabled", "comment", "expires_at",
-            "created_at", "updated_at", "revision",
+            "expiry_managed", "created_at", "updated_at", "revision",
         )},
         "attachments": attachments.get(row.id, []),
     } for row in rows], "total": total}
@@ -122,47 +140,71 @@ def delete_client(client_id: str, revision: int = Query(ge=1),
     ClientService(db, identity.username).remove(client_id, revision)
 
 
+@router.post("/clients/{client_id}/delete")
+def delete_client_with_access(client_id: str, data: ClientDelete, request: Request,
+                              identity=Depends(admin)):
+    return ClientDeletionService(
+        management(request).coordinator, identity.username
+    ).delete(client_id, data.revision, data.idempotency_key)
+
+
 @router.put("/clients/{client_id}/access")
 def client_access(client_id: str, data: ClientAccess, request: Request,
-                  identity=Depends(admin), db=Depends(db_session)):
-    runtime = management(request)
-    client = db.get(Client, client_id)
-    if not client:
-        raise DomainError("client_not_found", 404)
-    if client.revision != data.revision:
-        raise DomainError("revision_conflict")
-    previous = client.enabled
-    client.enabled = data.enabled
-    client.revision += 1
-    client.updated_at = now()
-    rows = db.scalars(select(Attachment).where(Attachment.client_id == client_id)).all()
-    inbound_ids = sorted({row.inbound_id for row in rows})
-    for row in rows:
-        if row.desired_state == "active":
-            row.sync_state = "pending"
-    try:
-        for inbound_id in inbound_ids:
-            runtime.coordinator._render(db, inbound_id)
-    except DomainError:
-        client.enabled = previous
-        db.rollback()
-        raise
-    record(db, identity.username,
-           "client.edit" if data.enabled else "client.disable", "client", client_id)
-    db.commit()
-    operations = []
-    for index, inbound_id in enumerate(inbound_ids):
-        operations.append(runtime.coordinator.apply(
-            inbound_id, f"{data.idempotency_key}-{index}", identity.username,
-            "client_access",
-        ))
-    return {"client_id": client_id, "enabled": data.enabled, "operations": operations}
+                  identity=Depends(admin)):
+    return ClientAccessService(
+        management(request).coordinator, identity.username
+    ).change(client_id, data.enabled, data.revision, data.idempotency_key)
+
+
+@router.get("/expiry/preview")
+def expiry_preview(request: Request, _=Depends(admin)):
+    return ExpiryScheduler(management(request).coordinator).preview()
+
+
+@router.put("/expiry/enabled")
+def expiry_enabled(data: ExpiryEnabled, request: Request, identity=Depends(admin)):
+    return ExpiryScheduler(management(request).coordinator).set_enabled(
+        data.enabled, data.fingerprint, identity.username
+    )
+
+
+@router.get("/expiry/attempts")
+def expiry_attempts(_=Depends(admin), db=Depends(db_session)):
+    from tunnelui.models import ExpiryAttempt
+
+    rows = db.scalars(select(ExpiryAttempt).order_by(
+        ExpiryAttempt.updated_at.desc()
+    ).limit(100)).all()
+    return {"items": [{key: getattr(row, key) for key in (
+        "id", "client_id", "inbound_id", "expires_at", "state", "attempts",
+        "next_attempt_at", "operation_id", "error_code", "updated_at",
+    )} for row in rows]}
+
+
+@router.post("/expiry/attempts/{attempt_id}/retry")
+def retry_expiry(attempt_id: str, request: Request, identity=Depends(admin)):
+    return ExpiryScheduler(management(request).coordinator).retry(
+        attempt_id, identity.username
+    )
+
+
+@router.put("/clients/{client_id}/credentials")
+def change_client_credentials(client_id: str, data: ClientCredentials, request: Request,
+                              identity=Depends(admin)):
+    return ClientCredentialService(
+        management(request).coordinator, identity.username
+    ).change(client_id, data.username, data.expires_at, data.display_name,
+             data.comment, data.revision, data.idempotency_key)
 
 
 @router.get("/inbounds")
 def inbounds(request: Request, _=Depends(admin), db=Depends(db_session)):
     rows = db.scalars(select(Inbound).order_by(Inbound.name)).all()
     runtime = request.app.state.management
+    execution_mode = (
+        "sandbox" if request.app.state.sandbox is not None
+        else "linux" if request.app.state.linux is not None else "unavailable"
+    )
     items = []
     for row in rows:
         metadata = json.loads(row.metadata_json or "{}")
@@ -186,10 +228,20 @@ def inbounds(request: Request, _=Depends(admin), db=Depends(db_session)):
             "client_count": count, "config_state": "pending" if current else row.config_state,
             "service_status": service_status,
             "operation": operation_output(current) if current else None,
+            "execution_mode": (
+                execution_mode if runtime and row.registry_id == runtime.environment.registry_id
+                else "unavailable"
+            ),
         })
-    return {"items": items, "adoption_available": bool(request.app.state.sandbox) and not any(
-        row.registry_id == runtime.environment.registry_id for row in rows
-    ) if runtime else False}
+    adoption_available = bool(
+        runtime
+        and getattr(runtime, "adoption", None)
+        and not any(
+            row.registry_id == runtime.environment.registry_id
+            for row in rows
+        )
+    )
+    return {"items": items, "adoption_available": adoption_available}
 
 
 @router.get("/inbounds/{inbound_id}")
@@ -205,6 +257,10 @@ def inbound_detail(inbound_id: str, request: Request, _=Depends(admin), db=Depen
         Operation.inbound_id == inbound_id
     ).order_by(Operation.created_at.desc()).limit(20)).all()
     runtime = request.app.state.management
+    execution_mode = (
+        "sandbox" if request.app.state.sandbox is not None
+        else "linux" if request.app.state.linux is not None else "unavailable"
+    )
     service_status = "unknown"
     if runtime and row.registry_id == runtime.environment.registry_id:
         if hasattr(runtime.provider, "running"):
@@ -218,6 +274,10 @@ def inbound_detail(inbound_id: str, request: Request, _=Depends(admin), db=Depen
         "id": row.id, "name": row.name, "enabled": row.enabled,
         "kind": row.kind, "public_address": row.public_address,
         "config_state": row.config_state, "metadata": metadata,
+        "execution_mode": (
+            execution_mode if runtime and row.registry_id == runtime.environment.registry_id
+            else "unavailable"
+        ),
         "service_status": service_status,
         "attachments": [{
             "id": attachment.id, "client_id": client.id, "username": client.username,
@@ -227,6 +287,11 @@ def inbound_detail(inbound_id: str, request: Request, _=Depends(admin), db=Depen
             "sync_state": attachment.sync_state, "revision": attachment.revision,
             "max_http2_conns": attachment.max_http2_conns,
             "max_http3_conns": attachment.max_http3_conns,
+            "applied_max_http2_conns": attachment.applied_max_http2_conns,
+            "applied_max_http3_conns": attachment.applied_max_http3_conns,
+            "applied_username": attachment.applied_username,
+            "applied_expires_at": attachment.applied_expires_at,
+            "applied_expired": attachment.applied_expired,
         } for attachment, client in attachments],
         "operations": [operation_output(item) for item in operations],
     }
@@ -234,19 +299,20 @@ def inbound_detail(inbound_id: str, request: Request, _=Depends(admin), db=Depen
 
 @router.get("/trusttunnel/discovery")
 def trusttunnel_discovery(request: Request, _=Depends(admin)):
-    return sandbox(request).adoption.discover()
+    return adoption(request).discover()
 
 
 @router.post("/trusttunnel/adoption/preview")
 def trusttunnel_preview(request: Request, _=Depends(admin)):
-    return sandbox(request).adoption.detect()
+    return adoption(request).detect()
 
 
 @router.post("/trusttunnel/adoption/confirm", status_code=201)
 def trusttunnel_confirm(data: AdoptionConfirm, request: Request,
                         identity=Depends(admin), db=Depends(db_session)):
-    runtime = sandbox(request)
-    return runtime.adoption.confirm(
+    service = adoption(request)
+    runtime = management(request)
+    return service.confirm(
         data.preview_id, db, runtime.coordinator.box, identity.username
     )
 
@@ -270,7 +336,24 @@ def update_attachment(attachment_id: str, data: AttachmentState, request: Reques
     runtime = management(request)
     operation = AttachmentService(
         db, identity.username, runtime.coordinator.box, runtime.coordinator
-    ).set_enabled(attachment_id, data.enabled, data.revision, data.idempotency_key)
+    ).set_enabled(
+        attachment_id, data.enabled, data.revision, data.idempotency_key,
+        {name: getattr(data, name) for name in (
+            "max_http2_conns", "max_http3_conns"
+        ) if name in data.model_fields_set},
+    )
+    return {"operation": operation}
+
+
+@router.post("/attachments/{attachment_id}/rotate-password")
+def rotate_attachment_password(attachment_id: str, data: PasswordRotation,
+                               request: Request, identity=Depends(admin),
+                               db=Depends(db_session)):
+    runtime = management(request)
+    operation = AttachmentService(
+        db, identity.username, runtime.coordinator.box, runtime.coordinator
+    ).rotate_password(attachment_id, data.password.get_secret_value(),
+                      data.revision, data.idempotency_key)
     return {"operation": operation}
 
 
@@ -289,9 +372,25 @@ def check_drift(inbound_id: str, request: Request, _=Depends(admin)):
     return management(request).coordinator.check_drift(inbound_id)
 
 
-@router.post("/inbounds/{inbound_id}/cancel-pending", status_code=204)
-def cancel_pending(inbound_id: str, request: Request, _=Depends(admin)):
-    management(request).coordinator.cancel_pending(inbound_id)
+@router.get("/inbounds/{inbound_id}/pending")
+def pending_changes(inbound_id: str, request: Request, _=Depends(admin)):
+    return management(request).coordinator.pending_preview(inbound_id)
+
+
+@router.post("/inbounds/{inbound_id}/apply-pending")
+def apply_pending(inbound_id: str, data: IdempotentAction, request: Request,
+                  identity=Depends(admin)):
+    return {"operation": management(request).coordinator.apply_pending(
+        inbound_id, data.idempotency_key, identity.username
+    )}
+
+
+@router.post("/inbounds/{inbound_id}/cancel-pending")
+def cancel_pending(inbound_id: str, data: PendingCancel, request: Request,
+                   identity=Depends(admin)):
+    return management(request).coordinator.cancel_pending(
+        inbound_id, data.fingerprint, identity.username
+    )
 
 
 @router.post("/inbounds/{inbound_id}/reimport")
@@ -340,7 +439,18 @@ def export_profile(client_id: str, data: ExportRequest, request: Request,
     )).first()
     if not row:
         raise DomainError("active_profile_not_found", 404)
-    client, _attachment, inbound = row
+    client, attachment, inbound = row
+    if (inbound.config_state != "synced" or attachment.sync_state != "active"
+            or attachment.desired_state != "active" or not client.enabled
+            or (client.expiry_managed and client.expires_at is not None
+                and client.expires_at <= int(time.time()))
+            or attachment.applied_username != client.username
+            or attachment.applied_secret_ciphertext != attachment.secret_ciphertext
+            or attachment.applied_expires_at != client.expires_at
+            or attachment.applied_expiry_managed != client.expiry_managed):
+        raise DomainError("profile_pending_apply")
+    if runtime.coordinator.check_drift(inbound.id)["drift"]:
+        raise DomainError("drift_conflict")
     exported = runtime.exporter.export(client.username, inbound.public_address or "", data.format)
     return {"format": exported.format, "content": exported.content,
             "media_type": exported.media_type, "sandbox": request.app.state.sandbox is not None}

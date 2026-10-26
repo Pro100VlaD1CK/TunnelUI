@@ -83,6 +83,24 @@ def test_protocol_rejects_malformed_oversized_version_operation_and_dynamic_fiel
             decode_request(payload)
 
 
+def test_commit_request_requires_typed_hash_precondition():
+    operation_id = str(uuid.uuid4())
+    payload = request(operation="files.commit_credentials", arguments={
+        "operation_id": operation_id,
+        "expected_hashes": {key: "0" * 64 for key in ("vpn", "hosts", "rules", "credentials")},
+    })
+    _decoded, arguments = decode_request(payload)
+    assert arguments.expected_hashes["credentials"] == "0" * 64
+    with pytest.raises(ProtocolError, match="malformed_request"):
+        decode_request(request(operation="files.commit_credentials", arguments={
+            "operation_id": operation_id,
+        }))
+    with pytest.raises(ProtocolError, match="malformed_request"):
+        decode_request(request(operation="files.commit_credentials", arguments={
+            "operation_id": operation_id, "expected_hashes": {"credentials": "bad"},
+        }))
+
+
 class FakeWriter:
     def __init__(self):
         self.output = b""
@@ -485,3 +503,98 @@ def test_export_failure_does_not_expose_argv_or_output(monkeypatch):
     assert str(captured.value) == "profile_export_timeout"
     assert "secret" not in str(captured.value)
 
+
+
+def test_managed_describe_rejects_client_supplied_dynamic_fields():
+    decoded, arguments = decode_request(request(operation="managed.describe"))
+    assert decoded.operation == "managed.describe"
+    assert arguments.model_dump() == {}
+
+    with pytest.raises(ProtocolError, match="malformed_request"):
+        decode_request(
+            request(
+                operation="managed.describe",
+                arguments={"path": "/etc/shadow"},
+            )
+        )
+
+
+def test_linux_client_describe_uses_only_allowlisted_managed_id():
+    transport = RecordingTransport()
+    client = LinuxAgentClient(transport)
+
+    assert client.describe("primary") == {}
+
+    sent = transport.requests[-1]
+    assert sent["managed_id"] == "primary"
+    assert sent["operation"] == "managed.describe"
+    assert sent["arguments"] == {}
+
+
+def test_health_retries_during_endpoint_startup():
+    attempts = 0
+
+    async def starting_tcp(*_args):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("not ready yet")
+
+    result = asyncio.run(
+        HealthProbe(
+            FakeSystemd(),
+            starting_tcp,
+            succeeds,
+        ).run(instance(), 1.0)
+    )
+
+    assert result.healthy is True
+    assert attempts == 2
+    assert result.tcp.status == "ok"
+    assert result.tls.status == "ok"
+
+
+def test_deeplink_export_discards_cli_explanatory_text(monkeypatch):
+    exporter = TrustTunnelCliExporter(object())
+
+    calls = 0
+
+    def fake_run(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return 0, b"trusttunnel_endpoint 1.1.0"
+        if calls == 2:
+            return 0, b"-c -a --format deeplink toml"
+        return 0, (
+            b"tt://?VALID_PAYLOAD\n\n"
+            b"To connect on mobile, scan the QR page\n"
+        )
+
+    class OpenBinary:
+        def __enter__(self):
+            return 7, 8, type(
+                "Info",
+                (),
+                {
+                    "st_ino": 1,
+                    "st_mtime_ns": 1,
+                    "st_ctime_ns": 1,
+                    "st_size": 1,
+                },
+            )()
+
+        def __exit__(self, *_args):
+            return False
+
+    class Files:
+        def open_binary(self, _instance):
+            return OpenBinary()
+
+    exporter.files = Files()
+    monkeypatch.setattr(exporter, "_run", fake_run)
+
+    result = exporter.export(instance(), "alice", "deeplink")
+
+    assert result == b"tt://?VALID_PAYLOAD"
+    assert b"\n" not in result

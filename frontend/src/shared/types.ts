@@ -6,6 +6,7 @@ export interface ClientInput {
   expires_at: number | null;
 }
 export interface Client extends ClientInput {
+  expiry_managed: boolean;
   id: string;
   created_at: number;
   updated_at: number;
@@ -23,6 +24,14 @@ export interface Attachment {
   applied_state: 'active' | 'disabled' | 'pending';
   sync_state: 'active' | 'pending' | 'conflict' | 'error' | 'disabled';
   revision: number;
+  max_http2_conns: number | null;
+  max_http3_conns: number | null;
+  applied_max_http2_conns: number | null;
+  applied_max_http3_conns: number | null;
+  applied_username: string | null;
+  applied_expires_at: number | null;
+  applied_expired: boolean | null;
+  credential_change_pending: boolean;
 }
 
 export interface Operation {
@@ -49,5 +58,6 @@ export interface Inbound {
   client_count: number;
   config_state: 'synced' | 'drift' | 'pending' | 'error' | 'recovery_required' | 'unmanaged';
   service_status: 'running' | 'stopped' | 'unknown';
+  execution_mode: 'sandbox' | 'linux' | 'unavailable';
   operation: Operation | null;
 }

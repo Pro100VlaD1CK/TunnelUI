@@ -22,11 +22,27 @@ Browser localStorage содержит только тему. Секретов т
 ## Threat model
 Злоумышленник из браузера не получает filesystem/systemd интерфейс. Даже с admin
 session agent не принимает paths или commands. Компрометация web UID ограничивается
-root-owned registry capabilities и socket peer UID. Это ограничение ещё не проверено
-на Debian staging и не равно полной защите при компрометации root.
+root-owned registry capabilities и socket peer UID. По сообщению владельца,
+права агента проверялись вручную на Debian staging; этот проход их не перепроверял
+и не приравнивает это к полной защите при компрометации root.
 SQL injection закрывается SQLAlchemy bind parameters; race edits — revision CAS;
 duplicate usernames — DB uniqueness. Для client с attachments metadata edit разрешён,
 а username/expiry/global enabled идут только через apply-aware paths; delete fail closed.
+Для attachment и global access idempotency intent записывается до внешнего эффекта;
+пароль входит только в keyed HMAC fingerprint, вычисленный из master key, а не в
+plaintext/salted-guessable digest. ClientDeletion, Operation и AuditEvent хранят
+только IDs, hashes, безопасные коды и результат. Удаление DB client запрещено,
+пока хотя бы один управляемый inbound не подтвердил отсутствие credential.
+Drift/pending preflight предотвращает случайное совместное применение чужих
+изменений. Отмена pending требует актуального preview fingerprint, учитывает другие
+inbounds глобального клиента и не меняет managed файлы.
+Миграция 0004 сохраняет applied secret только зашифрованным. Rotation пишет новый
+desired secret, удерживая старый applied secret до подтверждённого apply/health;
+списки/API операций и audit не раскрывают оба. `CredentialIntent` хранит keyed HMAC,
+`ExpiryAttempt` — только IDs, срок, safe code и cooldown. Старые сроки после
+миграции инертны; timer и настройка expiry по умолчанию выключены. Перед
+отзывом worker повторно проверяет deadline/revision под agent lock; ошибки видимы,
+повтор ограничен cooldown. Реальный Debian staging для этого изменения не проверен.
 Секретный master key и DB вместе позволяют decrypt; защищать отдельно и backup
 раздельно. Privileged endpoint binary экспортирует секретный stdout — не логировать.
 
@@ -35,14 +51,15 @@ Sandbox adoption/apply подключены к HTTP только при explicit
 fixture registry. Без него management endpoints отвечают `sandbox_unavailable`; fake
 provider не выбирается автоматически. Operation journal durable в SQLite, а AuditEvent
 остаётся отдельной сущностью; оба содержат только allowlisted metadata и safe codes.
-Backup files содержат credentials и создаются только в private sandbox directory;
-retention и production restore policy ещё не реализованы.
+Backup files содержат credentials и создаются в private sandbox directory либо в
+root-owned allowlisted каталоге Linux agent; retention и production restore policy
+ещё не реализованы.
 
-Linux adapter/agent, D-Bus provider, OS locks, socket-activated units и sample
-registry реализованы, но на Windows не исполнялись с реальным host boundary.
-Production startup/import не подключался; fake exporter продолжает обслуживать
-sandbox, а Linux exporter запрашивает официальный CLI только после явной Linux
-configuration. Runtime `--help` и SHA бинарника на VPS не получены.
+Linux adapter/agent, D-Bus provider, OS locks, socket-activated units и allowlisted
+registry реализованы. По сообщению владельца, отдельный Debian staging уже прошёл
+ручные import/apply/restart/rollback/official CLI export и клиентское VPN-подключение.
+Это свидетельство не заменяет автоматические тесты изменённого кода и не означает
+разрешения на production deployment. Fake exporter остаётся только в явном sandbox.
 
 Agent принимает versioned typed JSON через Unix socket, проверяет SO_PEERCRED UID,
 размеры сообщений и request ID. Root registry, managed files, binary и backup
@@ -52,6 +69,11 @@ arbitrary paths/commands. stdout CLI может содержать пароль/
 без secrets. QUIC health имеет статус `unverified`: TCP/TLS probe не доказывает
 работу UDP/HTTP3. Agent не раскрывает journal через IPC. Сбой release lock и
 неопределённый D-Bus outcome требуют operator review по Operation state.
+Для `files.commit_credentials` agent проверяет typed hash precondition всех managed
+файлов перед rename; явный drift не вызывает rollback поверх внешнего edit.
+Перед restore coordinator также сравнивает текущие hashes с исходным и записанным
+состоянием; неизвестное состояние требует ручного recovery. Ручной редактор вне
+lock агента сохраняет короткое TOCTOU окно между hash check и rename.
 
 Примерные systemd units используют `NoNewPrivileges`, `PrivateTmp`,
 `ProtectHome`, `ProtectSystem=strict`, защиту kernel/control groups,
@@ -59,19 +81,19 @@ arbitrary paths/commands. stdout CLI может содержать пароль/
 Web unit получает запись только в `/var/lib/tunnelui`; agent — только в
 allowlisted managed workdir, `/var/lib/tunnelui-agent` и `/run/tunnelui`.
 Agent оставлен root для записи root-owned файлов и доступа к system bus; web
-остаётся отдельным UID. `MemoryDenyWriteExecute` и остальные опции ещё нужно
-проверить на Debian с фактическими Python/dbus/TrustTunnel binary, прежде чем
-считать units пригодными к установке. Socket unit создаёт 0660 root:tunnelui;
+остаётся отдельным UID. Совместимость этих опций с предыдущей staging-версией
+проверялась вручную, но после изменений требуется повторный прогон. Socket unit создаёт 0660 root:tunnelui;
 tmpfiles заранее создаёт root-owned runtime/backup каталоги без world write.
 
 ## Обязательные проверки до production
-- Запустить Linux-only agent tests и полный CI на Linux, затем Debian 12 staging с
-  отдельным тестовым TrustTunnel instance: socket permissions/SO_PEERCRED, root registry,
-  systemd D-Bus, unit sandboxing, file owners/modes, rollback/recovery и CLI `--help`.
+- После текущих изменений запустить Linux-only agent tests и полный CI на Linux;
+  затем повторить Debian staging acceptance на отдельном TrustTunnel instance:
+  socket/SO_PEERCRED, registry, D-Bus, unit sandboxing, file owners/modes,
+  metadata re-import, drift, rollback/recovery и CLI export.
 - Проверить endpoint-specific health и QUIC с тестовым credential, если требуется
   подтверждение UDP/HTTP3; текущий probe подтверждает service/TCP/TLS, QUIC — unknown.
-- Реализовать безопасный Linux discovery/adoption и unit compatibility review;
-  sample registry не является автоматическим импортом работающего endpoint.
+- Сверить реальный systemd ExecStart/WorkingDirectory с root registry: текущий
+  Linux discovery использует allowlisted metadata, а не автоматический разбор unit.
 - Проверить backup retention, restart/recovery после power loss, audit tamper
   resistance, master key recovery и поведение при пропавшем ответе IPC.
 - Подтверждённый способ отключить последнего клиента v1.1.0, либо безопасно
@@ -79,11 +101,10 @@ tmpfiles заранее создаёт root-owned runtime/backup каталог�
 - Ограничение размера request до парсинга на reverse proxy, shared rate limit при
   масштабировании, безопасная доверенная proxy policy, HTTPS и firewall.
 - Протокол key rotation/recovery и backup retention; tamper resistance audit.
-- Expiry durable scheduler и visible failed jobs; attachment apply UI уже есть,
-  credential-affecting edit существующего attachment пока ограничен.
-- 3x-ui URL allowlist/SSRF policy для реального подключения; adapter пока не HTTP endpoint.
-  Не следовать redirect с Bearer token, TLS verification включена, bounded response.
+- Linux CI и Debian staging для migration 0004, expiry timer, username/rotation,
+  rollback, профилей и прав нового oneshot unit. Не включать timer при deploy
+  автоматически: сначала review preview и проверка backup/restore на копии БД.
 - Dependency vulnerability audit и staging acceptance на Debian 12.
 
-Нельзя считать это production hardening certificate. Рабочие сервисы не проверялись
-и не изменялись, доступ к серверу не выполнялся.
+Нельзя считать это production hardening certificate. В текущем проходе доступ к
+серверу не выполнялся; сведения о прошлой staging-проверке предоставлены пользователем.
