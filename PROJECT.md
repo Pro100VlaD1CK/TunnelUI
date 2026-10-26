@@ -194,21 +194,21 @@ PR #4 Settings/Rules/Metrics был слит merge-коммитом `85b67b1` в
 не изменились. Сохранены integration fix `35702f2` и документационный коммит
 `9934a96`. Локально для итогового состояния: Ruff pass; pytest 155 passed,
 13 POSIX-only skipped; TypeScript pass; Vitest 6 passed; Vite production build
-pass с известным Ant Design chunk warning; Playwright 7 passed. Linux CI должен
-быть повторно запущен в новом PR.
+pass с известным Ant Design chunk warning; Playwright 7 passed. В Draft PR #5
+GitHub Actions `Checks` run #33 для code head `8dd32e5` прошёл полностью:
+backend, Linux Agent и frontend/Playwright.
 Bind address, TLS keys, listener protocols остаются read-only; для
 `credentials.toml`, `vpn.toml` и `rules.toml` используется restart, а SIGHUP
 подтверждён только для TLS hosts. Expiry timer остаётся выключенным по умолчанию.
 
 ## Следующие задачи
-1. Опубликовать корректирующий PR из `codex/complete-settings-rules-integration`
-   в `phase4/linux-adoption` и дождаться полного Linux CI.
-2. Сливать корректирующий PR только после отдельного разрешения владельца.
-3. Отдельно согласовать Debian 12 staging acceptance Credentials/Expiry и
+1. Проверить Draft PR #5; сливать его в `phase4/linux-adoption` только после
+   отдельного разрешения владельца.
+2. Отдельно согласовать Debian 12 staging acceptance Credentials/Expiry и
    Settings/Rules/Metrics, включая drift, rollback/recovery и права файлов.
-4. Certificate read-only detection, metrics enable с явным loopback guard,
+3. Certificate read-only detection, metrics enable с явным loopback guard,
    несколько managed instances в одной панели, backup retention.
-5. Installation/upgrade/rollback packaging и отдельный production gate.
+4. Installation/upgrade/rollback packaging и отдельный production gate.
 
 ## Известные ограничения
 - Sandbox host-management остаётся fake; Linux adapter и adoption, по сообщению
@@ -327,7 +327,8 @@ DB backup и master-key backup хранятся раздельно. `docs/DEPLOY
   `phase4/linux-adoption`. Подготовлена корректирующая ветка от merge-коммита PR #3
   `0c21d25`: она объединяет проверенное состояние `85b67b1`, сохраняет исправления
   `35702f2` и документацию `9934a96`, не дублируя Credentials/Expiry. VPS,
-  deployment и expiry timer не затрагивались.
+  deployment и expiry timer не затрагивались. Draft PR #5 открыт в правильную
+  целевую ветку; GitHub Actions `Checks` run #33 прошёл полностью.
 - 2026-10-16: PR #3 и PR #4 объединены в интеграционной ветке обычным merge;
   сохранены credential/expiry и settings/rules/metrics paths, единый coordinator,
   блокировки, journal и recovery. Runtime SHA `35702f2` прошёл GitHub Actions
