@@ -1,6 +1,6 @@
 # TunnelUI
 
-Главный технический документ. Состояние на 2026-10-09. Product context — `PRODUCT.md`,
+Главный технический документ. Состояние на 2026-10-15. Product context — `PRODUCT.md`,
 визуальная система — `DESIGN.md`. В этом проходе Codex работает только с локальными
 исходниками; приведённые ниже Debian staging результаты сообщил владелец проекта.
 
@@ -27,7 +27,7 @@ fail closed с 503; скрытого fake fallback нет. Linux adoption уже
 
 ## Компоненты
 - `backend/src/tunnelui`: API, domain, services, repositories, integrations, system adapters.
-- `backend/migrations`: Alembic 0001–0003; схема не создаётся через `create_all`.
+- `backend/migrations`: Alembic 0001–0004; схема не создаётся через `create_all`.
 - `backend/tests`: temp directories, fakes и mocks; реальный systemd не вызывается.
 - `frontend/src`: app shell, shared API/types и features auth/inbounds/clients/profiles/audit/settings.
 - `frontend/e2e`: Chromium-пути Phase 1/2, recovery, mobile и accessibility smoke checks.
@@ -39,7 +39,8 @@ fail closed с 503; скрытого fake fallback нет. Linux adoption уже
 
 ## Модель данных
 `Admin`, `AdminSession`, `Client`, `Inbound`, `Attachment`, `Operation`, `AuditEvent`,
-`AttachmentIntent`, `ClientAccessIntent`, `ClientDeletion`.
+`AttachmentIntent`, `ClientAccessIntent`, `ClientDeletion`, `CredentialIntent`,
+`ExpirySetting`, `ExpiryAttempt`.
 Client глобален; credential и connection limits принадлежат attachment. Attachment
 хранит encrypted password, desired/applied/sync state и revision. Operation хранит
 kind, state, idempotency key, request fingerprint, ожидаемые/результирующие hashes,
@@ -53,6 +54,11 @@ API token или private key. AuditEvent — отдельная сущность
 Миграция 0003 добавляет secret-free idempotency intents, replay удалений и снимок
 фактически применённых HTTP/2/3 limits и глобального enabled для каждого attachment.
 Intents не содержат credential, plaintext config или deep-link.
+Миграция 0004 сохраняет для каждого attachment подтверждённые username,
+зашифрованный password, expiry policy и факт отзыва по сроку. Старые сроки
+получают `expiry_managed=false`, scheduler — `enabled=false`; миграция не меняет
+файлы и не перезапускает TrustTunnel. `CredentialIntent` хранит keyed HMAC
+запроса и IDs; `ExpiryAttempt` — срок, попытку, cooldown и safe error.
 
 ## TrustTunnel integration
 Проверен официальный tag v1.1.0, commit `fab5b8353a19332f935fa30869307d37d4a898d1`.
@@ -131,9 +137,17 @@ TunnelUI HTTPS TCP 9443. Web работает как `tunnelui`, агент — 
   credentials render, apply, fake restart/health, durable Operation checkpoints,
   AuditEvent, drift, rollback, `needs_recovery` и recover, last-active-client guard,
   concurrent apply guard, Profiles и inbound-specific fake QR/deep-link/TOML export.
-- Attached client разрешает безопасное изменение display name/comment; username,
-  expiry заблокированы до отдельного apply workflow. Глобальное enabled теперь меняется
-  через idempotent per-inbound apply; частичный результат явно возвращается оператору.
+- Attached client меняет username и expiry через отдельный idempotent per-inbound
+  apply с проверкой applied metadata и явным partial result. Новая запись с
+  заданным сроком помечается managed; мигрированные сроки остаются inert до opt-in.
+  Глобальное enabled использует тот же принцип.
+  Password rotation выбирает attachment и сохраняет прежний зашифрованный секрет
+  до подтверждённого apply; export закрыт при pending/rollback.
+- UTC expiry показывает оставшееся время, приближение срока, просроченный, ожидающий
+  и подтверждённый отзыв отдельно. `tunnelui expiry-run` — разовый durable проход
+  для systemd timer: DB attempt, CAS/lease, deterministic Operation key, cooldown,
+  manual retry и проверка expiry/revision под agent lock. Preview и включение в
+  Settings явные; миграция и примерный timer не активируют автоматический отзыв.
 - Клиента с attachments можно полностью удалить одним подтверждением: сначала
   preflight каждого inbound, затем последовательный apply и проверка фактических
   credentials/hashes, и только после этого удаление DB-записи. Частичный отказ
@@ -160,25 +174,25 @@ TunnelUI HTTPS TCP 9443. Web работает как `tunnelui`, агент — 
   regression-тесты проверяют повтор confirm, agent failure, drift, metadata refresh.
 
 ## Сейчас в работе
-Текущий локальный проход доводит жизненный цикл клиента: полное удаление с отзывом
-доступа, настройку attachment limits, idempotent global access, выход из drift/pending
-через UI и regression-тесты. Linux Agent и его привилегии не менялись; текущие
-изменения не запускались на Debian staging. Существующий coordinator, journal и
-recovery сохранены.
-На Windows локально: Ruff pass; pytest 127 passed, 12 Linux-only skipped,
-1 upstream Starlette/httpx warning; TypeScript и Vite build pass; Vitest 3 passed;
-Playwright 6 passed. Финальный E2E запускался после сборки и проверил pending,
-drift, rollback/recovery и mobile 320/375/390/768. Linux CI/staging для этого diff
-ещё не запускались.
+Локальный credential/expiry проход: миграция 0004, username/expiry apply,
+password rotation, opt-in durable expiry worker и UI. Существующие coordinator,
+journal/recovery и Linux Agent сохранены. Все операции выполнялись только на
+синтетических данных. В draft PR #3 Linux CI для кодового SHA `5c9a8a5` прошёл:
+backend, linux-agent и frontend/Playwright. Debian staging для этого изменения
+не запускался; каждый последующий push требует повторной проверки CI.
+На Windows: Ruff pass; pytest 140 passed, 12 Linux-only skipped, 1 upstream
+Starlette/httpx warning; TypeScript pass; Vite build pass (известный Ant chunk
+warning); Vitest 6 passed; Playwright 7 passed на двух изолированных sandbox.
+Impeccable detector: 0 findings; ручной audit/harden/polish исправил mobile
+confirmation title и навигацию Settings. Timer unit и реальный TrustTunnel для
+этого изменения не проверялись на staging.
 
 ## Следующие задачи
-1. Завершить оставшийся Phase 2 product scope: durable expiry scheduler/jobs и
-   безопасное применение username/expiry для уже привязанных клиентов.
-2. Запустить Linux CI и повторить Debian 12 staging acceptance для текущих изменений:
+1. Запустить Linux CI и повторить Debian 12 staging acceptance для текущих изменений:
    drift, metadata re-import, agent failure, rollback/recovery, unit compatibility.
-3. Завершить оставшийся TrustTunnel scope: metrics `/clients`, Rules, certificate
+2. Завершить оставшийся TrustTunnel scope: metrics `/clients`, Rules, certificate
    read-only detection и поддержка нескольких managed instances в одной панели.
-4. Installation/upgrade/rollback packaging и отдельный production gate.
+3. Installation/upgrade/rollback packaging и отдельный production gate.
 
 ## Известные ограничения
 - Sandbox host-management остаётся fake; Linux adapter и adoption, по сообщению
@@ -191,8 +205,13 @@ drift, rollback/recovery и mobile 320/375/390/768. Linux CI/staging для эт
 - Полное удаление также последовательно применяет несколько inbounds: если часть уже
   отозвана, а другая не подтвердилась, клиент не удаляется. Для продолжения нужен
   новый idempotency key после разрешения ошибки; автоматической атомарности нет.
-- Expiry учитывается renderer, но автоматического durable scheduler/revoke пока нет.
-- Username/expiry attached client нельзя менять через текущий UI; metadata можно.
+- Expiry scheduler не включается после миграции: оператор предварительно смотрит
+  список, включает setting и отдельно устанавливает/включает timer. Debian timer,
+  crash replay и реальные время/права ещё не прошли staging acceptance.
+- Multi-inbound username/expiry apply последователен. При частичном результате
+  attachment имеют разные applied values; UI показывает pending/error и закрывает
+  неподтверждённый export. Оператор завершает apply-pending после устранения причины;
+  отмена при разных applied identity запрещена. Общего cross-inbound rollback нет.
 - Пустой `credentials.toml` не поддерживается TrustTunnel v1.1.0, поэтому последний
   active client нельзя отключить или отвязать без отдельного проверенного решения.
 - Fake exporter намеренно не создаёт реальный `tt://`; Linux exporter использует
@@ -256,6 +275,16 @@ drift, rollback/recovery и mobile 320/375/390/768. Linux CI/staging для эт
   с проверкой всех затронутых inbounds до удаления DB-строки, а не CASCADE delete.
   Отмена pending привязана к preview fingerprint и показывает влияние глобального
   enabled на другие inbounds. ADR-004/010 остаются действующими.
+- ADR-017 active (2026-10-15): срок — policy TunnelUI, а не поле TrustTunnel
+  v1.1.0. Миграция 0004 не активирует старые сроки. Разовый CLI + timer работают
+  только после preview и явного включения; каждая попытка имеет durable lease,
+  cooldown и Operation key. Последний credential блокируется. Прежнее ожидание,
+  что один только renderer означает автоматический отзыв, **superseded**.
+- ADR-018 active (2026-10-15): username/expiry являются desired значениями Client,
+  а фактические username/expiry/password фиксируются per Attachment после health
+  и hash verification. Несколько inbound применяются по очереди; partial не
+  скрывается. Старый encrypted password удерживается до успеха rotation. Профиль
+  нельзя экспортировать, пока желаемое и применённое расходятся.
 Изменённые решения помечаются superseded и дополняются заменой, история не стирается.
 
 ## Deployment notes
@@ -269,6 +298,9 @@ DB backup и master-key backup хранятся раздельно. `docs/DEPLOY
 для текущего diff, а не разрешение на production install.
 
 ## Changelog
+- 2026-10-15: локально добавлены миграция 0004, safe username/expiry apply,
+  per-attachment password rotation, opt-in expiry-run/timer example, статусы,
+  Settings и профили, regression/E2E. Linux Agent/VPS не менялись.
 - 2026-10-09: client lifecycle: safe multi-inbound revoke/delete, attachment limits,
   global access intents, preflight drift/pending, compare-and-cancel preview и
   UI-пути восстановления. Миграция 0003; Linux/VPS не затронуты.

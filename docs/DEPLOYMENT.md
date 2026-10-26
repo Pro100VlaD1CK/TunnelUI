@@ -49,8 +49,9 @@ pnpm --dir frontend test
 pnpm --dir frontend build
 pnpm --dir frontend test:e2e
 ```
-E2E использует установленный Chrome (Playwright channel chrome) и port 8765,
-создаёт отдельную временную SQLite в .runtime и fixture admin test-admin с
+E2E использует установленный Chrome (Playwright channel chrome) и два изолированных
+loopback sandbox на ports 8765/8766 (второй — credential/expiry scenario),
+создаёт отдельные временные SQLite в .runtime и fixture admin test-admin с
 заведомо тестовым паролем из scripts/e2e_server.py. Production/admin DB не используется.
 Сервер теста только 127.0.0.1, access log отключён; Playwright останавливает его
 после тестов. При аварийном завершении Windows disposable temp directory может
@@ -74,6 +75,8 @@ Native engine binary gitignored; launcher при отсутствии может
 
 ## Linux boundary package (не инструкция для production install)
 `packaging/systemd/` содержит примерные web, agent и socket units;
+`tunnelui-expiry.service` и `.timer` — отдельный oneshot worker с пятиминутным
+интервалом, **не включённый автоматически**;
 `packaging/tmpfiles.d/tunnelui.conf` — runtime/private каталоги;
 `packaging/agent.toml.example` — root-owned managed registry;
 `packaging/tunnelui.env.example` — web environment. Это примеры в репозитории,
@@ -109,6 +112,27 @@ iPhone. Production TrustTunnel остаётся на TCP/UDP 443. Эти дан�
 Особенно сверить фактические unit ExecStart/WorkingDirectory, owner/mode, socket
 SO_PEERCRED, официальный CLI и health. Sample units не делают ветку production-ready.
 
+## Миграция 0004 и включение expiry (только будущая процедура)
+До обновления сделать согласованные backup SQLite и master key, проверить restore
+на копии, затем выполнить 0004 на копии БД и убедиться, что старые `expires_at`
+имеют `expiry_managed=false`, а `expiry_settings.enabled=false`. Миграция не
+перезаписывает credentials и не запускает TrustTunnel. Старый release после 0004
+должен использовать сохранённый pre-upgrade DB snapshot; понижение Alembic на
+работающей БД не является runbook rollback, так как оно удаляет историю новых
+applied/expiry state. Не смешивать backend и agent разных release.
+
+После отдельной staging проверки можно установить timer unit из того же release.
+Сначала в Settings → «Сроки доступа» просмотреть всех затрагиваемых клиентов,
+включая старые просроченные записи и последний активный credential. Включение
+настройки само не запускает worker. Только затем оператор отдельно включает
+`tunnelui-expiry.timer`; `Persistent=true` делает один catch-up после простоя.
+`tunnelui expiry-run` выполняется от `tunnelui`, через текущий root-owned agent,
+без root для web/worker. Если настройка выключена, CLI не вызывает host actions.
+Ошибки и cooldown доступны в Settings; «Повторить» планирует следующую попытку,
+не делает немедленный restart. Для остановки отключить timer и настройку;
+уже подтверждённо отозванный доступ не восстанавливается без явного продления.
+До staging acceptance не устанавливать и не включать timer на текущем VPS.
+
 ## Воспроизводимое обновление отдельного staging release (проект процедуры)
 
 Эта процедура описывает будущий операторский запуск, а не выполнялась Codex. До
@@ -126,7 +150,7 @@ backend/agent из одного SHA. Сохранить manifest SHA, checksums 
 проверить по `docs/SECURITY.md`.
 
 До переключения снять согласованную копию SQLite и отдельную защищённую копию
-master key; проверить миграцию 0003 на копии DB. Откат к старой версии после миграции
+master key; проверить миграцию 0004 на копии DB. Откат к старой версии после миграции
 должен использовать совместимую pre-upgrade DB snapshot, если старый код не понимает
 новую схему. Подготовить version-pinned настройки `PYTHONPATH` одновременно для web
 и agent, плюс `TUNNELUI_STATIC_DIR` от того же release. После локальной проверки

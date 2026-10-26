@@ -15,7 +15,7 @@ class ClientService:
         self.repo = ClientRepository(db)
 
     def create(self, data: ClientInput):
-        client = Client(**data.model_dump())
+        client = Client(**data.model_dump(), expiry_managed=data.expires_at is not None)
         self.db.add(client)
         try:
             self.db.flush()
@@ -45,10 +45,12 @@ class ClientService:
         ):
             raise DomainError("attached_client_requires_apply")
         action = "client.disable" if client.enabled and not data.enabled else "client.edit"
+        expiry_changed = data.expires_at != client.expires_at
         try:
             result = self.db.execute(update(Client).where(
                 Client.id == client_id, Client.revision == data.revision
             ).values(**data.model_dump(exclude={"revision"}), updated_at=now(),
+                     expiry_managed=client.expiry_managed or expiry_changed,
                      revision=data.revision + 1))
             if result.rowcount != 1:
                 raise DomainError("revision_conflict")

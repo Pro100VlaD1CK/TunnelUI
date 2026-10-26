@@ -18,7 +18,11 @@ export function Profiles() {
   const clients = useQuery({ queryKey: ['clients', 'profiles'], queryFn: () => api<Page<Client>>('/clients?limit=100') });
   useEffect(() => { if (!selected && clients.data?.items.length) setSelected(clients.data.items[0].id); }, [clients.data, selected]);
   const chosen = clients.data?.items.find(item => item.id === selected);
-  const active = chosen?.attachments.filter(item => item.applied_state === 'active') ?? [];
+  const active = chosen?.attachments.filter(item => item.applied_state === 'active'
+    && item.sync_state === 'active' && !item.applied_expired
+    && item.applied_username === chosen.username && !item.credential_change_pending
+    && chosen.enabled && (!chosen.expiry_managed || chosen.expires_at === null
+      || chosen.expires_at > Date.now() / 1000)) ?? [];
   const exporter = useMutation({ mutationFn: ({ format, attachment }: ExportRequest) => api<Exported>(`/clients/${selected}/profiles/trusttunnel`, { method: 'POST', body: JSON.stringify({ format, inbound_id: attachment.inbound_id }) }), onSuccess: async data => {
     if (data.format === 'toml') {
       const url = URL.createObjectURL(new Blob([data.content], { type: data.media_type }));
@@ -43,11 +47,12 @@ export function Profiles() {
     <div className="page-heading"><div><Typography.Title level={1}>Профили</Typography.Title><Typography.Text type="secondary">Секретные данные создаются только по явному действию и не попадают в списки</Typography.Text></div></div>
     <div className="toolbar"><Select aria-label="Клиент профиля" loading={clients.isPending} value={selected} onChange={setSelected} placeholder="Выберите клиента" showSearch optionFilterProp="label" options={clients.data?.items.map(item => ({ value: item.id, label: `${item.display_name} · ${item.username}` }))} /></div>
     <QueryState loading={clients.isPending} error={clients.error} retry={() => clients.refetch()} />
+    {chosen && chosen.attachments.some(item => !active.includes(item)) && <Alert type="warning" showIcon title="Есть профиль без подтверждённого доступа" description="Изменение учётных данных, срок или ошибка применения могут оставить старый профиль неактуальным. Проверьте входящее и журнал операций; новый QR и TOML доступны после успешного применения." />}
     {exporter.error && <Alert type="error" showIcon title={errorText(exporter.error)} />}
-    {chosen && <Table size="small" rowKey="id" pagination={false} dataSource={active} columns={[
+    {chosen && <Table size="small" rowKey="id" pagination={false} scroll={{ x: 700 }} dataSource={active} columns={[
       { title: 'Профиль', render: () => <><strong>TrustTunnel</strong><br /><Typography.Text type="secondary">Мобильный профиль · интерфейс официального CLI</Typography.Text></> },
       { title: 'Источник', dataIndex: 'inbound_name' },
-      { title: 'Статус', render: () => <Tag color="success">Активен</Tag> },
+      { title: 'Статус', render: () => <Tag color="success">Применён · актуален</Tag> },
       { title: 'Действия', width: 390, render: (_, attachment) => <Space wrap><Button icon={<QrcodeOutlined />} loading={exporter.isPending} onClick={() => exporter.mutate({ format: 'deeplink', attachment })}>QR</Button><Button icon={<CopyOutlined />} loading={exporter.isPending} onClick={() => copy(attachment)}>Копировать ссылку</Button><Button icon={<DownloadOutlined />} loading={exporter.isPending} onClick={() => exporter.mutate({ format: 'toml', attachment })}>Скачать TOML</Button></Space> },
     ]} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="У клиента нет активного применённого профиля TrustTunnel" /> }} />}
     <Modal open={Boolean(profile)} title={profile?.sandbox ? 'TrustTunnel · тестовый профиль' : 'TrustTunnel · профиль подключения'} footer={<Button onClick={() => setProfile(undefined)}>Закрыть</Button>} onCancel={() => setProfile(undefined)} destroyOnHidden>

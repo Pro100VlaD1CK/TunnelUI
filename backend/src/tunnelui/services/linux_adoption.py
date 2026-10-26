@@ -179,6 +179,9 @@ class LinuxAdoptionService:
                                     secret_ciphertext=box.encrypt(
                                         credential.password
                                     ),
+                                    applied_username=credential.username,
+                                    applied_expiry_managed=True,
+                                    applied_expired=False,
                                     max_http2_conns=credential.max_http2_conns,
                                     max_http3_conns=credential.max_http3_conns,
                                     applied_max_http2_conns=credential.max_http2_conns,
@@ -190,6 +193,11 @@ class LinuxAdoptionService:
                                     sync_state="active",
                                 )
                             )
+
+                        for row in db.scalars(select(Attachment).where(
+                            Attachment.inbound_id == inbound.id
+                        )).all():
+                            row.applied_secret_ciphertext = row.secret_ciphertext
 
                         record(
                             db,

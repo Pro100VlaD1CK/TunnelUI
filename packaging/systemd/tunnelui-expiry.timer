@@ -1,0 +1,10 @@
+[Unit]
+Description=Check TunnelUI client expiry every five minutes
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+Unit=tunnelui-expiry.service
+
+[Install]
+WantedBy=timers.target
